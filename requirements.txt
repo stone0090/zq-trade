@@ -1,0 +1,17 @@
+# 数据处理
+pandas>=2.0.0
+numpy>=1.24.0
+
+# 数据可视化
+matplotlib>=3.7.0
+mplfinance>=0.12.0b0  # 使用预发布版本，安装时需添加 --pre 参数
+
+# 数据获取（可选）
+yfinance>=0.2.0
+akshare>=1.11.0
+
+# 技术指标计算
+TA-Lib>=0.4.0
+
+# 工具库
+python-dateutil>=2.8.0

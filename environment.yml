@@ -1,0 +1,18 @@
+name: trade-kline
+channels:
+  - https://mirrors.aliyun.com/anaconda/pkgs/main
+  - https://mirrors.aliyun.com/anaconda/pkgs/free
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.10
+  - pandas>=2.0.0
+  - numpy>=1.24.0
+  - matplotlib>=3.7.0
+  - pip
+  - python-dateutil>=2.8.0
+  - pip:
+    - mplfinance>=0.12.0
+    - yfinance>=0.2.0
+    - akshare>=1.11.0
+    - TA-Lib>=0.4.0
