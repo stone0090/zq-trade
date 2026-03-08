@@ -114,69 +114,73 @@ def analyze_contour(df: pd.DataFrame,
     density = _calc_density(struct_df)
     result.density_score = round(density, 4)
 
-    # ─── 7. 评分（结合数学+视觉特征） ───
-    s_threshold = 0.80
-    a_threshold = 0.60
-    b_threshold = 0.34
+    # ─── 7. 评分（规则驱动，匹配视觉感知判断） ───
+    n = len(struct_df)
+    is_short = n < 90  # 短结构的密集度/异常指标不可靠，放宽
 
-    # 窄结构惩罚
-    if result.is_narrow:
-        s_threshold += config.lk_narrow_penalty
-        a_threshold += config.lk_narrow_penalty
-        b_threshold += config.lk_narrow_penalty
+    # 判定因子
+    has_severe_tail_break = tail_break and tail_break_pct > 2.0
+    has_mild_tail_break = tail_break and tail_break_pct <= 2.0
+    has_good_symmetry = symmetry >= 0.55
+    has_poor_density = density < 0.40 and not is_short
+    abnormal_limit = 0.07 if is_short else 0.05
+    has_many_abnormal = abnormal_ratio > abnormal_limit
 
-    # 视觉特征调整评分
-    # 尾部破位 → 严重降分
-    if tail_break and tail_break_pct > 3.0:
-        quality_score -= 0.30  # 严重破位，大幅降分
-    elif tail_break:
-        quality_score -= 0.15  # 轻度破位
-
-    # 对称性好 → 加分
-    if symmetry >= 0.7:
-        quality_score += 0.05
-    elif symmetry < 0.3:
-        quality_score -= 0.05
-
-    # 中间段密集度差 → 降分
-    if density < 0.4:
-        quality_score -= 0.10
-
-    quality_score = max(0.0, min(1.0, quality_score))
-    result.quality_score = round(quality_score, 4)
-
-    # 收集非S原因
+    # 决策树
     deficiencies = []
-    if tail_break:
-        deficiencies.append(f"尾部破位({tail_break_pct:.1f}%)")
-    if smoothness_norm > 0.5:
-        deficiencies.append(f"边界平滑度偏低")
-    if density < 0.4:
-        deficiencies.append(f"中间段松散(密集度{density:.2f})")
-    if symmetry < 0.3:
-        deficiencies.append(f"对称性差({symmetry:.2f})")
-    if cv_norm > 0.5:
-        deficiencies.append(f"K线振幅不均匀")
-    if abnormal_norm > 0.5:
-        deficiencies.append(f"异常K线偏多({abnormal_count}根)")
-    if wave_regularity < 0.5:
-        deficiencies.append(f"波浪规则性差")
-
-    if quality_score >= s_threshold:
-        result.score = GradeScore.S
-        result.reasoning.append(f"质量分 {quality_score:.2f}（≥{s_threshold:.2f}） → S")
-    elif quality_score >= a_threshold:
-        result.score = GradeScore.A
-        reason = "、".join(deficiencies) if deficiencies else f"质量分未达S({quality_score:.2f}<{s_threshold:.2f})"
-        result.reasoning.append(f"质量分 {quality_score:.2f} → A（{reason}）")
-    elif quality_score >= b_threshold:
+    if has_severe_tail_break:
+        # 尾部严重破位 → 最高B
         result.score = GradeScore.B
-        reason = "、".join(deficiencies) if deficiencies else f"质量分偏低({quality_score:.2f})"
-        result.reasoning.append(f"质量分 {quality_score:.2f} → B（{reason}）")
-    else:
+        deficiencies.append(f"尾部破位({tail_break_pct:.1f}%)")
+    elif not tail_break and not has_poor_density and not has_many_abnormal:
+        # 无明显问题 → S
+        result.score = GradeScore.S
+    elif has_mild_tail_break and has_good_symmetry:
+        # 轻度破位但整体对称 → A
+        result.score = GradeScore.A
+        deficiencies.append(f"尾部稍凌厉({tail_break_pct:.1f}%)")
+    elif has_mild_tail_break and not has_good_symmetry and abnormal_ratio > 0.07:
+        # 破位 + 不对称 + 异常多 → C
         result.score = GradeScore.C
-        reason = "、".join(deficiencies) if deficiencies else f"质量分过低({quality_score:.2f})"
-        result.reasoning.append(f"质量分 {quality_score:.2f} → C（{reason}）")
+        deficiencies.append(f"尾部破位({tail_break_pct:.1f}%)")
+        deficiencies.append(f"对称性差({symmetry:.2f})")
+        deficiencies.append(f"异常K线{abnormal_count}根")
+    elif has_mild_tail_break:
+        # 轻度破位 → B
+        result.score = GradeScore.B
+        deficiencies.append(f"尾部破位({tail_break_pct:.1f}%)")
+        if not has_good_symmetry:
+            deficiencies.append(f"对称性不足({symmetry:.2f})")
+    elif (has_many_abnormal or has_poor_density) and has_good_symmetry:
+        # 异常多/密集度差，但对称性好补救 → A
+        result.score = GradeScore.A
+        if has_many_abnormal:
+            deficiencies.append(f"异常K线偏多({abnormal_count}根)")
+        if has_poor_density:
+            deficiencies.append(f"中间段松散")
+        deficiencies.append(f"对称性尚可({symmetry:.2f})")
+    elif has_many_abnormal or has_poor_density:
+        # 异常多/密集度差，无对称补救 → B
+        result.score = GradeScore.B
+        if has_many_abnormal:
+            deficiencies.append(f"异常K线{abnormal_count}根({abnormal_ratio:.1%})")
+        if has_poor_density:
+            deficiencies.append(f"中间段松散(密集度{density:.2f})")
+    else:
+        # 其他小瑕疵 → A
+        result.score = GradeScore.A
+        if smoothness_norm > 0.5:
+            deficiencies.append(f"边界平滑度偏低")
+        if cv_norm > 0.5:
+            deficiencies.append(f"K线振幅不均匀")
+        if wave_regularity < 0.5:
+            deficiencies.append(f"波浪规则性差")
+
+    reason = "、".join(deficiencies) if deficiencies else ""
+    if result.score == GradeScore.S:
+        result.reasoning.append(f"形态工整，无明显缺陷 → S")
+    else:
+        result.reasoning.append(f"{reason} → {result.score.name}")
 
     result.passed = result.score.value >= GradeScore.B.value
 

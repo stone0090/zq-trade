@@ -235,7 +235,7 @@ class AnalyzerConfig:
     dl_tilt_threshold: float = 0.08        # 结构右倾阈值
     dl_concentration_threshold: float = 0.05  # 筹码集中度阈值(std/mean)（仅记录）
     dl_max_drift_pct: float = 5.0              # 端点漂移阈值(%)，超过则收窄结构
-    dl_max_range_pct: float = 7.0              # 结构最大振幅(%)，超过则收窄结构
+    dl_max_range_pct: float = 5.0              # 结构最大振幅(%)，超过则收窄结构
 
     # PT 平台位
     pt_bin_width_atr_ratio: float = 0.1    # 直方图bin宽度 = ATR * ratio
@@ -258,7 +258,7 @@ class AnalyzerConfig:
     lk_narrow_penalty: float = 0.10       # 窄结构评分惩罚
 
     # TY 统一区间
-    ty_squeeze_atr_ratio: float = 0.6      # 小K线判定(振幅 < ATR*ratio)
+    ty_squeeze_atr_ratio: float = 0.85     # 小K线判定(振幅 < ATR*ratio)
     ty_scan_window: int = 30               # 从尾部扫描的K线数
     ty_max_interruptions: int = 1          # 允许夹杂的非小K线数
     ty_max_gap_to_trigger: int = 1         # 与触发K线最大间距
@@ -274,6 +274,6 @@ class AnalyzerConfig:
     dn_max_merged: int = 3                 # 最大合并K线数
 
     # SF 释放级别（尾部向突破方向蹭的程度）
-    sf_tail_drift_1st_max: float = 1.5    # 1st级最大尾部偏移(%)
-    sf_tail_drift_2nd_max: float = 4.0    # 2nd级最大尾部偏移(%)
+    sf_tail_drift_1st_max: float = 0.6    # 1st级最大峰值偏移(%)
+    sf_tail_drift_2nd_max: float = 4.0    # 2nd级最大峰值偏移(%)
     # 超过2nd阈值 → 3rd

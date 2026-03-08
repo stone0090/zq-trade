@@ -130,6 +130,15 @@ def analyze_structure(df: pd.DataFrame, config: AnalyzerConfig = None) -> Struct
     # ─── 4b. 端点漂移检查：包含趋势段时收窄结构 ───
     _narrow_if_drifting(df, result, config)
 
+    # 收窄后更新局部变量（_narrow_if_drifting可能修改了result的字段）
+    kline_count = result.kline_count
+    structure_start = result.structure_start_idx
+    range_high = result.range_high
+    range_low = result.range_low
+    range_pct = result.range_pct
+    struct_df = df.iloc[structure_start: structure_end + 1]
+    mean_price = struct_df['Close'].mean()
+
     # ─── 5. 缺陷检测 ───
 
     # 5a. 前趋势急跌/急涨检测
@@ -182,6 +191,7 @@ def _narrow_if_drifting(df: pd.DataFrame, result: StructureResult,
     """
     如果结构振幅过宽或端点漂移过大，说明包含了趋势段，
     从起点侧逐步收窄，直到振幅/漂移可接受。
+    如果无法满足阈值，退化为最佳收窄（最小振幅且K线数≥90）。
     """
     start = result.structure_start_idx
     end = result.structure_end_idx
@@ -189,6 +199,7 @@ def _narrow_if_drifting(df: pd.DataFrame, result: StructureResult,
         return
 
     original_count = result.kline_count
+    original_pct = result.range_pct
     need_narrow = False
 
     # 检查1: 振幅过宽
@@ -214,6 +225,12 @@ def _narrow_if_drifting(df: pd.DataFrame, result: StructureResult,
     total = end - start + 1
     step = max(1, total // 30)
 
+    # 跟踪最佳收窄位置（最小振幅且K线数≥dl_min_klines）
+    best_pct = original_pct
+    best_start = start
+    best_h = result.range_high
+    best_l = result.range_low
+
     for new_start in range(start + step, end - 30, step):
         seg = df.iloc[new_start: end + 1]
         highs = seg['High'].values
@@ -230,15 +247,39 @@ def _narrow_if_drifting(df: pd.DataFrame, result: StructureResult,
         nm = (ns_avg + ne_avg) / 2
         d = abs(ns_avg - ne_avg) / nm * 100 if nm > 0 else 0
 
+        # 跟踪最佳位置（K线数仍满足最低要求）
+        if pct < best_pct and len(seg) >= config.dl_min_klines:
+            best_pct = pct
+            best_start = new_start
+            best_h = h
+            best_l = l
+
         if pct <= config.dl_max_range_pct and d <= config.dl_max_drift_pct:
-            result.structure_start_idx = new_start
-            result.kline_count = len(seg)
-            result.range_high = h
-            result.range_low = l
-            result.range_pct = round(pct, 2)
-            result.passed = result.kline_count >= config.dl_min_klines
-            result.score = GradeScore.S if result.passed else GradeScore.C
-            result.reasoning.append(
-                f"{narrow_reason}过大，收窄: "
-                f"{original_count}K→{result.kline_count}K")
-            break
+            _apply_narrow(result, new_start, end, df, h, l, pct,
+                          narrow_reason, original_count)
+            return
+
+    # 无法满足两个阈值 → 退化为最佳收窄
+    # 要求振幅至少改善30%，且K线数仍≥dl_min_klines
+    if best_start != start and best_pct < original_pct * 0.7:
+        _apply_narrow(result, best_start, end, df, best_h, best_l, best_pct,
+                      narrow_reason, original_count, fallback=True)
+
+
+def _apply_narrow(result: StructureResult, new_start: int, end: int,
+                  df: pd.DataFrame, h: float, l: float, pct: float,
+                  narrow_reason: str, original_count: int,
+                  fallback: bool = False):
+    """应用收窄结果到StructureResult"""
+    seg = df.iloc[new_start: end + 1]
+    result.structure_start_idx = new_start
+    result.kline_count = len(seg)
+    result.range_high = h
+    result.range_low = l
+    result.range_pct = round(pct, 2)
+    result.passed = result.kline_count >= 90  # dl_min_klines
+    result.score = GradeScore.S if result.passed else GradeScore.C
+    label = "最佳收窄" if fallback else "收窄"
+    result.reasoning.append(
+        f"{narrow_reason}过大，{label}: "
+        f"{original_count}K→{result.kline_count}K")

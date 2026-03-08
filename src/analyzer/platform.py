@@ -219,23 +219,29 @@ def _find_best_candidate(struct_df, candidates, pt_type, tolerance,
 
     avg_body = (struct_df['Close'] - struct_df['Open']).abs().mean()
 
+    # 穿越判定用更宽容忍带（2倍触碰容忍），"稍微超过"不算穿越
+    pen_tolerance = tolerance * 2
+
     for center_price, freq in candidates:
         touches = _count_touches(struct_df, center_price, tolerance,
                                  min_interval, pt_type)
         shadow_pens, body_pens, pen_events = _count_penetrations_detailed(
-            struct_df, center_price, tolerance, pt_type
+            struct_df, center_price, pen_tolerance, pt_type
         )
 
         # 实体穿越后的有效测试次数
         post_pen_tests = 0
         if body_pens > 0:
             post_pen_tests = _count_post_penetration_tests(
-                struct_df, center_price, tolerance, pt_type
+                struct_df, center_price, pen_tolerance, pt_type
             )
 
         total_pens = shadow_pens + body_pens
         # 候选评分: 测试次数优先，穿越是瑕疵
+        # 达到最低触碰数的候选大幅加分，确保优先于未达标候选
         candidate_score = len(touches) * 3 - body_pens * 2 - shadow_pens * 1
+        if len(touches) >= config.pt_min_touch_count:
+            candidate_score += 100
 
         # 动态区间
         if touches:
@@ -279,10 +285,10 @@ def _grade_platform(candidate: dict, config: AnalyzerConfig) -> tuple:
     """
     根据测试次数、穿越类型、间隔分布评分。
 
-    S: ≥3次测试，实体和影线均不穿越，间隔充分均匀
-    A: ≥3次测试，仅影线穿越；或实体穿越后又有2次以上测试
+    S: ≥3次测试，实体未穿越 + 测试间隔充分
+    A: ≥3次测试，实体未穿越但间隔偏短；或实体穿越后有≥2次测试恢复
     B: 多次穿越但仍有测试；或间隔不够
-    C: 不足3次测试
+    C: 不足3次测试；或实体穿越后恢复不足
 
     Returns:
         (GradeScore, reason_str)
@@ -299,19 +305,23 @@ def _grade_platform(candidate: dict, config: AnalyzerConfig) -> tuple:
     if tc < min_required:
         return GradeScore.C, f"仅{tc}次测试（不足{min_required}次）"
 
-    # ≥3次测试，实体和影线均不穿越，间隔充分
-    if body_pens == 0 and shadow_pens == 0 and avg_interval >= ideal_interval:
-        return GradeScore.S, ""
+    # ≥3次测试 + 实体未穿越
+    if body_pens == 0:
+        # 间隔充分 → S（影线穿越不影响平台有效性）
+        if avg_interval >= ideal_interval:
+            detail = f"影线穿越{shadow_pens}次（不影响评级）" if shadow_pens > 0 else ""
+            return GradeScore.S, detail
+        # 间隔偏短 → A（影线穿越 + 间隔密 = 有轻微隐患）
+        detail = f"间隔{avg_interval:.0f}根偏短"
+        if shadow_pens > 0:
+            detail += f"，影线穿越{shadow_pens}次"
+        return GradeScore.A, detail
 
-    # ≥3次测试，仅影线穿越（实体未穿越）
-    if body_pens == 0 and shadow_pens > 0:
-        return GradeScore.A, f"影线穿越{shadow_pens}次（实体未穿越）"
-
-    # 实体穿越后又有2次以上测试 → A
+    # 实体穿越后又有≥2次测试恢复 → A
     if body_pens > 0 and post_pen_tests >= 2:
         return GradeScore.A, f"实体穿越{body_pens}次，但穿越后有{post_pen_tests}次测试恢复"
 
-    # 实体穿越后不足2次测试 → 直接C（恢复不够，平台无效）
+    # 实体穿越后不足2次测试 → C（恢复不够，平台无效）
     if body_pens > 0 and post_pen_tests < 2:
         return GradeScore.C, f"实体穿越{body_pens}次，穿越后仅{post_pen_tests}次测试（恢复不够）"
 

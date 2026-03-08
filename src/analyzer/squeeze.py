@@ -25,8 +25,11 @@ def analyze_squeeze(df: pd.DataFrame,
     result = SqueezeResult()
 
     if not structure.passed:
-        result.reasoning.append("DL未通过，跳过TY分析")
-        return result
+        # DL未通过但结构数据仍有效，继续检测统一区间
+        # 用户会独立评估TY，不因DL不够而跳过
+        if structure.structure_start_idx is None or structure.structure_end_idx is None:
+            result.reasoning.append("DL未检测到有效结构，跳过TY分析")
+            return result
 
     start = structure.structure_start_idx
     end = structure.structure_end_idx
@@ -93,19 +96,23 @@ def analyze_squeeze(df: pd.DataFrame,
     result.gap_to_trigger = gap
 
     # ─── 7. 评分 ───
+    # 密度法下用密度替代strict连续性判定
+    total_window = seq_end_local - seq_start_local + 1
+    density = squeeze_length / total_window if total_window > 0 else 0
+
     if (squeeze_length >= 4 and
             slope_pct < config.ty_slope_s_threshold and
-            interruptions == 0):
+            density >= 0.80):
         result.score = GradeScore.S
         result.reasoning.append(
-            f"连续{squeeze_length}根小K线，斜率{slope_pct:.4f}%，"
-            f"无夹杂，紧贴末端 → S"
+            f"{squeeze_length}根小K线（密度{density:.0%}），斜率{slope_pct:.4f}%，"
+            f"紧贴末端 → S"
         )
     elif (squeeze_length >= 4 and
           slope_pct < config.ty_slope_a_threshold):
         result.score = GradeScore.A
         result.reasoning.append(
-            f"{squeeze_length}根小K线，斜率{slope_pct:.4f}%"
+            f"{squeeze_length}根小K线（密度{density:.0%}），斜率{slope_pct:.4f}%"
             f"（稍宽松），紧贴末端 → A"
         )
     elif squeeze_length >= 3:
@@ -116,8 +123,8 @@ def analyze_squeeze(df: pd.DataFrame,
         if slope_pct >= config.ty_slope_a_threshold:
             reasons.append(f"斜率{slope_pct:.4f}%偏大")
         result.reasoning.append(
-            "、".join(reasons) + "（需其他维度整体好才有意义） → B"
-            if reasons else f"{squeeze_length}根小K线 → B"
+            "、".join(reasons) + f"（密度{density:.0%}） → B"
+            if reasons else f"{squeeze_length}根小K线（密度{density:.0%}） → B"
         )
     else:
         result.score = GradeScore.C
@@ -142,12 +149,15 @@ def analyze_squeeze(df: pd.DataFrame,
 def _find_tail_squeeze(is_small: np.ndarray,
                        max_interruptions: int) -> tuple:
     """
-    从尾部向前扫描，找到紧贴末端的小K线压缩序列。
+    从尾部向前扫描，找到紧贴末端的小K线压缩区。
 
-    TY必须在DL最末端：
-    - DL的最后一根K线必须是小K线（TY紧贴末端，不允许间隙）
-    - TY和DN之间的间隙（max_gap=1）由DN侧处理，不在这里
-    - 从末尾向前扩展，允许序列中间最多max_interruptions次非小K线夹杂
+    密度法：在尾部窗口中，只要小K线占比达标即视为压缩区。
+    实际行情中小K线和正常K线交替出现很常见，严格要求连续性会漏检。
+
+    规则：
+    - 末端5根K线内至少有1根小K线（紧贴末端）
+    - 从大到小尝试窗口(最大20根)，找到最大的满足密度要求的窗口
+    - 密度要求：小K线占比 ≥ 40%，且至少3根小K线
 
     Returns:
         (start_idx, end_idx, interruption_count) 或 None
@@ -156,35 +166,22 @@ def _find_tail_squeeze(is_small: np.ndarray,
     if n == 0:
         return None
 
-    # DL最后一根K线必须是小K线，否则没有TY
-    if not is_small[n - 1]:
+    # 末端5根K线内必须有小K线（紧贴末端）
+    tail_check = min(5, n)
+    if not any(is_small[n - tail_check:]):
         return None
 
-    # 从最后一根向前扩展
-    seq_end = n - 1
-    seq_start = n - 1
-    interruptions = 0
+    # 密度法：从大到小尝试窗口
+    min_density = 0.40
+    min_small_count = 3
 
-    j = n - 2
-    while j >= 0:
-        if is_small[j]:
-            seq_start = j
-        else:
-            interruptions += 1
-            if interruptions > max_interruptions:
-                break
-            # 检查前面是否还有小K线
-            if j > 0 and is_small[j - 1]:
-                seq_start = j
-            else:
-                break
-        j -= 1
+    for window_size in range(min(20, n), 2, -1):
+        start = n - window_size
+        segment = is_small[start:]
+        small_count = int(segment.sum())
 
-    # 有效小K线数
-    total_len = seq_end - seq_start + 1
-    effective = total_len - interruptions
+        if small_count >= min_small_count and small_count / window_size >= min_density:
+            interruptions = window_size - small_count
+            return (start, n - 1, interruptions)
 
-    if effective < 2:
-        return None
-
-    return (seq_start, seq_end, interruptions)
+    return None
