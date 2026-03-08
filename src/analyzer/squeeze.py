@@ -16,7 +16,8 @@ def analyze_squeeze(df: pd.DataFrame,
     """
     TY 统一区间分析。
 
-    从结构尾部扫描，找到连续的小K线压缩区，验证斜率和长度。
+    从结构末端向前扫描，找到紧贴末端的连续小K线压缩区。
+    TY必须在DL的最末端，不能在中间。
     """
     if config is None:
         config = AnalyzerConfig()
@@ -43,21 +44,21 @@ def analyze_squeeze(df: pd.DataFrame,
 
     squeeze_threshold = base_atr * config.ty_squeeze_atr_ratio
 
-    # ─── 2. 标记小K线 ───
+    # ─── 2. 标记小K线（只看尾部scan_window范围） ───
     scan_len = min(config.ty_scan_window, len(struct_df))
     tail_df = struct_df.iloc[-scan_len:]
     ranges = (tail_df['High'] - tail_df['Low']).values
     is_small = ranges < squeeze_threshold
 
-    # ─── 3. 从尾部往前扫描最长连续小K线序列 ───
-    best_seq = _find_best_squeeze_sequence(is_small, config.ty_max_interruptions)
+    # ─── 3. 从末端向前扩展，TY必须紧贴DL最后一根K线 ───
+    seq = _find_tail_squeeze(is_small, config.ty_max_interruptions)
 
-    if best_seq is None:
-        result.reasoning.append("未检测到有效统一区间（无连续小K线序列）")
+    if seq is None:
+        result.reasoning.append("未检测到有效统一区间（末端无连续小K线）")
         return result
 
-    seq_start_local, seq_end_local, interruptions = best_seq
-    squeeze_length = seq_end_local - seq_start_local + 1
+    seq_start_local, seq_end_local, interruptions = seq
+    squeeze_length = seq_end_local - seq_start_local + 1 - interruptions
 
     # 转换为在完整df中的索引
     tail_start_in_df = len(struct_df) - scan_len
@@ -87,43 +88,44 @@ def analyze_squeeze(df: pd.DataFrame,
     slope_pct = normalize_slope(slope, mean_price)
     result.slope_pct = round(slope_pct, 5)
 
-    # ─── 6. 与结构末端(触发K线位置)的间距 ───
-    gap = end - squeeze_end_abs
+    # ─── 6. 与结构末端的间距（紧贴末端已在搜索时保证） ───
+    gap = (len(struct_df) - 1) - squeeze_end_in_struct
     result.gap_to_trigger = gap
 
     # ─── 7. 评分 ───
-    if (squeeze_length >= 6 and
+    if (squeeze_length >= 4 and
             slope_pct < config.ty_slope_s_threshold and
-            gap <= config.ty_max_gap_to_trigger and
             interruptions == 0):
         result.score = GradeScore.S
         result.reasoning.append(
             f"连续{squeeze_length}根小K线，斜率{slope_pct:.4f}%，"
-            f"无夹杂，间距{gap}根 → S"
+            f"无夹杂，紧贴末端 → S"
         )
     elif (squeeze_length >= 4 and
-          slope_pct < config.ty_slope_a_threshold and
-          gap <= config.ty_max_gap_to_trigger):
+          slope_pct < config.ty_slope_a_threshold):
         result.score = GradeScore.A
         result.reasoning.append(
-            f"连续{squeeze_length}根小K线，斜率{slope_pct:.4f}%，"
-            f"间距{gap}根 → A"
+            f"{squeeze_length}根小K线，斜率{slope_pct:.4f}%"
+            f"（稍宽松），紧贴末端 → A"
         )
-    elif (squeeze_length >= 3 and
-          slope_pct < config.ty_slope_b_threshold):
+    elif squeeze_length >= 3:
         result.score = GradeScore.B
+        reasons = []
+        if squeeze_length < 4:
+            reasons.append(f"仅{squeeze_length}根小K线")
+        if slope_pct >= config.ty_slope_a_threshold:
+            reasons.append(f"斜率{slope_pct:.4f}%偏大")
         result.reasoning.append(
-            f"{squeeze_length}根小K线，斜率{slope_pct:.4f}% → B"
+            "、".join(reasons) + "（需其他维度整体好才有意义） → B"
+            if reasons else f"{squeeze_length}根小K线 → B"
         )
     else:
         result.score = GradeScore.C
         reasons = []
         if squeeze_length < 3:
-            reasons.append(f"仅{squeeze_length}根小K线")
+            reasons.append(f"仅{squeeze_length}根小K线不足")
         if slope_pct >= config.ty_slope_b_threshold:
             reasons.append(f"斜率{slope_pct:.4f}%过大")
-        if gap > config.ty_max_gap_to_trigger:
-            reasons.append(f"间距{gap}根过远")
         result.reasoning.append("、".join(reasons) + " → C")
 
     result.passed = result.score.value >= GradeScore.B.value
@@ -137,10 +139,15 @@ def analyze_squeeze(df: pd.DataFrame,
     return result
 
 
-def _find_best_squeeze_sequence(is_small: np.ndarray,
-                                max_interruptions: int) -> tuple:
+def _find_tail_squeeze(is_small: np.ndarray,
+                       max_interruptions: int) -> tuple:
     """
-    从尾部往前扫描，找到允许少量中断的最长连续小K线序列。
+    从尾部向前扫描，找到紧贴末端的小K线压缩序列。
+
+    TY必须在DL最末端：
+    - DL的最后一根K线必须是小K线（TY紧贴末端，不允许间隙）
+    - TY和DN之间的间隙（max_gap=1）由DN侧处理，不在这里
+    - 从末尾向前扩展，允许序列中间最多max_interruptions次非小K线夹杂
 
     Returns:
         (start_idx, end_idx, interruption_count) 或 None
@@ -149,45 +156,35 @@ def _find_best_squeeze_sequence(is_small: np.ndarray,
     if n == 0:
         return None
 
-    best = None
-    best_length = 0
+    # DL最后一根K线必须是小K线，否则没有TY
+    if not is_small[n - 1]:
+        return None
 
-    # 从尾部开始扫描
-    i = n - 1
-    while i >= 0:
-        if not is_small[i]:
-            i -= 1
-            continue
+    # 从最后一根向前扩展
+    seq_end = n - 1
+    seq_start = n - 1
+    interruptions = 0
 
-        # 找到一个小K线，向前扩展
-        seq_end = i
-        seq_start = i
-        interruptions = 0
-        j = i - 1
-
-        while j >= 0:
-            if is_small[j]:
+    j = n - 2
+    while j >= 0:
+        if is_small[j]:
+            seq_start = j
+        else:
+            interruptions += 1
+            if interruptions > max_interruptions:
+                break
+            # 检查前面是否还有小K线
+            if j > 0 and is_small[j - 1]:
                 seq_start = j
             else:
-                interruptions += 1
-                if interruptions > max_interruptions:
-                    break
-                # 检查前面是否还有小K线（避免中断后无续接）
-                if j > 0 and is_small[j - 1]:
-                    seq_start = j  # 暂时包含这个中断
-                else:
-                    break
-            j -= 1
+                break
+        j -= 1
 
-        length = seq_end - seq_start + 1
-        # 实际小K线数 = length - interruptions
-        effective = length - interruptions
+    # 有效小K线数
+    total_len = seq_end - seq_start + 1
+    effective = total_len - interruptions
 
-        if effective > best_length and effective >= 2:
-            best_length = effective
-            best = (seq_start, seq_end, interruptions)
+    if effective < 2:
+        return None
 
-        # 从 seq_start 之前继续扫描
-        i = seq_start - 1
-
-    return best
+    return (seq_start, seq_end, interruptions)

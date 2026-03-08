@@ -2,14 +2,14 @@
 DL 独立结构检测
 
 从最新数据往前回溯，识别水平盘整区间（independent structure），
-验证其K线数量是否满足 ≥ 60 根的硬性条件。
+验证其K线数量是否满足 ≥ 90 根的硬性条件。
 """
 import numpy as np
 import pandas as pd
 
-from src.analyzer.base import AnalyzerConfig, StructureResult, PassFail
+from src.analyzer.base import AnalyzerConfig, StructureResult, GradeScore
 from src.utils.helpers import (
-    linear_regression_slope, normalize_slope, calc_atr
+    linear_regression_slope, calc_atr
 )
 
 
@@ -78,6 +78,7 @@ def analyze_structure(df: pd.DataFrame, config: AnalyzerConfig = None) -> Struct
     # 步骤b: 从 structure_end 往前扩展盘整区间
     structure_start = structure_end
     current_noise_streak = 0
+    steep_threshold = config.dl_flat_slope_threshold * 3  # 明显趋势段阈值
 
     i = structure_end - 1
     while i >= window - 1:
@@ -85,6 +86,9 @@ def analyze_structure(df: pd.DataFrame, config: AnalyzerConfig = None) -> Struct
             structure_start = i
             current_noise_streak = 0
         else:
+            # 遇到明显趋势段（斜率远超盘整阈值）→ 立即截断
+            if not np.isnan(slopes[i]) and slopes[i] > steep_threshold:
+                break
             current_noise_streak += 1
             if current_noise_streak > config.dl_noise_tolerance:
                 # 噪声过多，盘整段到此为止
@@ -123,54 +127,118 @@ def analyze_structure(df: pd.DataFrame, config: AnalyzerConfig = None) -> Struct
     result.structure_start_idx = structure_start
     result.structure_end_idx = structure_end
 
+    # ─── 4b. 端点漂移检查：包含趋势段时收窄结构 ───
+    _narrow_if_drifting(df, result, config)
+
     # ─── 5. 缺陷检测 ───
 
-    # 5a. 前趋势急跌检测
+    # 5a. 前趋势急跌/急涨检测
     pre_trend_len = min(30, structure_start)
     if pre_trend_len >= 5:
         pre_close = df['Close'].iloc[structure_start - pre_trend_len: structure_start]
         pre_slope = linear_regression_slope(pre_close)
-        pre_slope_norm = normalize_slope(pre_slope, pre_close.mean())
-        result.prior_trend_slope = round(pre_slope_norm, 4)
+        pre_mean = pre_close.mean()
+        pre_slope_signed = pre_slope / pre_mean * 100 if pre_mean != 0 else 0.0
+        result.prior_trend_slope = round(pre_slope_signed, 4)
 
-        if pre_slope < 0 and pre_slope_norm > config.dl_steep_decline_threshold:
-            result.flaws.append(f"结构前有急跌（斜率 {pre_slope_norm:.3f}%/K线）")
+        if pre_slope_signed < -config.dl_steep_decline_threshold:
+            result.flaws.append(f"结构前有急跌（斜率 {pre_slope_signed:.3f}%/K线）")
+        elif pre_slope_signed > config.dl_steep_decline_threshold:
+            result.flaws.append(f"结构前有急涨（斜率 {pre_slope_signed:.3f}%/K线）")
     else:
         result.prior_trend_slope = 0.0
 
-    # 5b. 结构右倾检测
+    # 5b. 结构倾斜检测
     struct_slope = linear_regression_slope(struct_df['Close'])
-    struct_slope_norm = normalize_slope(struct_slope, mean_price)
-    result.structure_slope = round(struct_slope_norm, 4)
+    struct_slope_signed = struct_slope / mean_price * 100 if mean_price != 0 else 0.0
+    result.structure_slope = round(struct_slope_signed, 4)
 
-    if struct_slope > 0 and struct_slope_norm > config.dl_tilt_threshold:
-        result.flaws.append(f"结构向右上倾斜（斜率 {struct_slope_norm:.3f}%/K线）")
+    if struct_slope_signed > config.dl_tilt_threshold:
+        result.flaws.append(f"结构向右上倾斜（斜率 {struct_slope_signed:.3f}%/K线）")
+    elif struct_slope_signed < -config.dl_tilt_threshold:
+        result.flaws.append(f"结构向右下倾斜（斜率 {struct_slope_signed:.3f}%/K线）")
 
-    # ─── 6. 评分 ───
+    # ─── 6. 评分（初始评分，方向性限制在scorer中处理） ───
     if kline_count >= config.dl_min_klines:
-        result.score = PassFail.S
+        result.score = GradeScore.S
         result.passed = True
         result.reasoning.append(f"盘整区间包含 {kline_count} 根K线（≥{config.dl_min_klines}），结构充分")
-    elif kline_count >= config.dl_min_klines_relaxed:
-        # 经验覆盖: 筹码集中度检验
-        price_std = struct_df['Close'].std()
-        concentration = price_std / mean_price if mean_price > 0 else 1.0
-        if concentration < config.dl_concentration_threshold:
-            result.score = PassFail.S
-            result.passed = True
-            result.reasoning.append(
-                f"盘整区间 {kline_count} 根K线（<{config.dl_min_klines}），"
-                f"但筹码集中度优异（{concentration:.4f} < {config.dl_concentration_threshold}），经验放行"
-            )
-        else:
-            result.reasoning.append(
-                f"盘整区间仅 {kline_count} 根K线，"
-                f"且筹码集中度不足（{concentration:.4f}），不满足条件"
-            )
     else:
-        result.reasoning.append(f"盘整区间仅 {kline_count} 根K线，远不足 {config.dl_min_klines} 根要求")
+        result.score = GradeScore.C
+        result.passed = False
+        result.reasoning.append(
+            f"盘整区间 {kline_count} 根K线（<{config.dl_min_klines}），"
+            f"结构未成熟，可继续观察"
+        )
 
     # 补充区间信息
     result.reasoning.append(f"区间价格: {range_low:.2f} ~ {range_high:.2f}，振幅 {range_pct:.2f}%")
 
     return result
+
+
+def _narrow_if_drifting(df: pd.DataFrame, result: StructureResult,
+                        config: AnalyzerConfig):
+    """
+    如果结构振幅过宽或端点漂移过大，说明包含了趋势段，
+    从起点侧逐步收窄，直到振幅/漂移可接受。
+    """
+    start = result.structure_start_idx
+    end = result.structure_end_idx
+    if end - start < 30:
+        return
+
+    original_count = result.kline_count
+    need_narrow = False
+
+    # 检查1: 振幅过宽
+    if result.range_pct > config.dl_max_range_pct:
+        need_narrow = True
+        narrow_reason = f"振幅{result.range_pct:.1f}%"
+
+    # 检查2: 端点漂移（前1/4均价 vs 后1/4均价）
+    if not need_narrow:
+        quarter = max(10, (end - start) // 4)
+        q1_avg = df.iloc[start: start + quarter]['Close'].mean()
+        q4_avg = df.iloc[end - quarter + 1: end + 1]['Close'].mean()
+        mid = (q1_avg + q4_avg) / 2
+        drift = abs(q1_avg - q4_avg) / mid * 100 if mid > 0 else 0
+        if drift > config.dl_max_drift_pct:
+            need_narrow = True
+            narrow_reason = f"端点漂移{drift:.1f}%"
+
+    if not need_narrow:
+        return
+
+    # 从起点往后逐步推进，每次跳 step 根
+    total = end - start + 1
+    step = max(1, total // 30)
+
+    for new_start in range(start + step, end - 30, step):
+        seg = df.iloc[new_start: end + 1]
+        highs = seg['High'].values
+        lows = seg['Low'].values
+        h = float(np.percentile(highs, 95))
+        l = float(np.percentile(lows, 5))
+        m = seg['Close'].mean()
+        pct = (h - l) / m * 100 if m > 0 else 0
+
+        # 也检查新起点的漂移
+        n_avg = min(5, len(seg) // 4)
+        ns_avg = seg.iloc[:n_avg]['Close'].mean()
+        ne_avg = seg.iloc[-n_avg:]['Close'].mean()
+        nm = (ns_avg + ne_avg) / 2
+        d = abs(ns_avg - ne_avg) / nm * 100 if nm > 0 else 0
+
+        if pct <= config.dl_max_range_pct and d <= config.dl_max_drift_pct:
+            result.structure_start_idx = new_start
+            result.kline_count = len(seg)
+            result.range_high = h
+            result.range_low = l
+            result.range_pct = round(pct, 2)
+            result.passed = result.kline_count >= config.dl_min_klines
+            result.score = GradeScore.S if result.passed else GradeScore.C
+            result.reasoning.append(
+                f"{narrow_reason}过大，收窄: "
+                f"{original_count}K→{result.kline_count}K")
+            break

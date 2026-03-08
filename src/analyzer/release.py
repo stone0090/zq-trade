@@ -1,187 +1,109 @@
 """
 SF 释放级别评估
 
-评估在触发K线之前（结构形成之后），价格是否已经有了方向性运动，
-以此判断风险收益比。
+评估调整结构的尾部是否向突破方向蹭上去了。
+好的调整尾部应该保持水平，动能完全蓄积而不是提前释放。
 """
 import numpy as np
 import pandas as pd
 
 from src.analyzer.base import (
     AnalyzerConfig, ReleaseResult, ReleaseLevel,
-    StructureResult, MomentumResult
+    StructureResult
 )
 
 
 def analyze_release(df: pd.DataFrame,
                     structure: StructureResult,
-                    momentum: MomentumResult,
-                    config: AnalyzerConfig = None) -> ReleaseResult:
+                    config: AnalyzerConfig = None,
+                    direction: str = '') -> ReleaseResult:
     """
     SF 释放级别分析。
 
-    观察结构结束到触发K线之间的价格运动幅度。
+    评估DL结构的尾部是否向突破方向蹭。
+    做多时看尾部是否向上蹭，做空时看尾部是否向下蹭。
+    1st=水平无蹭 / 2nd=蹭了一点 / 3rd=蹭了很多。
     """
     if config is None:
         config = AnalyzerConfig()
 
     result = ReleaseResult()
+    result.direction = direction
 
-    if not structure.passed:
-        result.reasoning.append("DL未通过，跳过SF分析")
+    if structure.kline_count == 0:
+        result.reasoning.append("DL未检测到结构，跳过SF分析")
         return result
 
-    if momentum.pending:
-        # DN尚未触发，但仍需检测结构末端到当前是否已有释放
-        # SF不依赖DN，独立评估结构本身的释放情况
-        struct_end = structure.structure_end_idx
-        last_idx = len(df) - 1
-        range_high = structure.range_high
-        range_low = structure.range_low
+    start = structure.structure_start_idx
+    end = structure.structure_end_idx
+    struct_df = df.iloc[start: end + 1]
 
-        if last_idx > struct_end and range_high > 0 and range_low > 0:
-            window_df = df.iloc[struct_end:last_idx + 1]
-            release_bars = last_idx - struct_end
-            result.release_bars = release_bars
-
-            # 检测向上释放（价格突破结构上沿）
-            highest = window_df['High'].max()
-            up_pct = max(0, (highest - range_high) / range_high * 100)
-            # 检测向下释放（价格跌破结构下沿）
-            lowest = window_df['Low'].min()
-            down_pct = max(0, (range_low - lowest) / range_low * 100)
-            release_pct = max(up_pct, down_pct)
-            result.release_pct = round(release_pct, 3)
-            result.release_speed = round(release_pct / release_bars, 4) if release_bars > 0 else 0
-
-            if (release_pct >= config.sf_second_max_pct or
-                    release_bars > config.sf_second_max_bars):
-                result.score = ReleaseLevel.THIRD
-                result.passed = False
-                result.reasoning.append(
-                    f"DN待定，但已释放{release_pct:.2f}%/{release_bars}根 → 3rd"
-                )
-                result.action_advice = "释放过大，需等待全新独立结构"
-            elif (release_pct >= config.sf_first_max_pct or
-                  release_bars > config.sf_first_max_bars):
-                result.score = ReleaseLevel.SECOND
-                result.passed = True
-                result.reasoning.append(
-                    f"DN待定，已有释放{release_pct:.2f}%/{release_bars}根 → 2nd"
-                )
-                result.action_advice = "已有前置释放，需等回踩后执行"
-            else:
-                result.score = ReleaseLevel.FIRST
-                result.passed = True
-                result.reasoning.append("DN待定，无明显前置释放 → 1st")
-                result.action_advice = "等待触发信号"
-        else:
-            result.score = ReleaseLevel.FIRST
-            result.passed = True
-            result.reasoning.append("尚未出现突破，默认按1st评估（无前置释放）")
-            result.action_advice = "等待触发信号"
-
+    if len(struct_df) < 10:
+        result.reasoning.append("结构区间数据不足，无法评估释放")
         return result
 
-    struct_end = structure.structure_end_idx
-    trigger_idx = momentum.trigger_idx
-    direction = momentum.direction
-    range_high = structure.range_high
-    range_low = structure.range_low
+    close = struct_df['Close'].values
+    n = len(close)
+    baseline = float(np.median(close))
 
-    # ─── 1. 观察区间 ───
-    if trigger_idx <= struct_end:
-        # 触发K线在结构内部 — 但仍需检查触发K线本身是否已超出结构范围
-        trigger_bar = df.iloc[trigger_idx]
+    # ─── 1. 多尺度尾部偏移检测 ───
+    # 检查 last 1/4, 1/3, 1/2，取方向性最大偏移
+    tail_fractions = [0.25, 0.33, 0.50]
+    max_directional_drift = 0.0
+    best_tail_len = 0
+
+    for frac in tail_fractions:
+        tail_len = max(int(n * frac), 5)
+        if tail_len >= n:
+            continue
+        tail_avg = float(np.mean(close[-tail_len:]))
+        raw_drift = (tail_avg - baseline) / baseline * 100
+
+        # 方向性偏移：只关心向突破方向蹭的幅度
         if direction == 'bullish':
-            release_pct = max(0, (trigger_bar['High'] - range_high) / range_high * 100)
+            directional_drift = max(0.0, raw_drift)  # 向上蹭才算
+        elif direction == 'bearish':
+            directional_drift = max(0.0, -raw_drift)  # 向下蹭才算
         else:
-            release_pct = max(0, (range_low - trigger_bar['Low']) / range_low * 100)
+            directional_drift = abs(raw_drift)  # 方向未定，用绝对值
 
-        if release_pct >= config.sf_second_max_pct:
-            result.score = ReleaseLevel.THIRD
-            result.passed = False
-            result.release_pct = round(release_pct, 3)
-            result.release_bars = 0
-            result.reasoning.append(
-                f"触发K线已释放{release_pct:.2f}%（≥{config.sf_second_max_pct}%） → 3rd"
-            )
-            result.action_advice = "释放过大，需等待全新独立结构"
-            return result
-        elif release_pct >= config.sf_first_max_pct:
-            result.score = ReleaseLevel.SECOND
-            result.passed = True
-            result.release_pct = round(release_pct, 3)
-            result.release_bars = 0
-            result.reasoning.append(
-                f"触发K线已释放{release_pct:.2f}%（≥{config.sf_first_max_pct}%） → 2nd"
-            )
-            result.action_advice = "已有释放，需等回踩后执行"
-            return result
-        else:
-            result.score = ReleaseLevel.FIRST
-            result.passed = True
-            result.release_pct = round(release_pct, 3)
-            result.release_bars = 0
-            result.reasoning.append("触发K线在结构内，释放有限 → 1st")
-            result.action_advice = "条件满足，可直接执行"
-            return result
+        if directional_drift > max_directional_drift:
+            max_directional_drift = directional_drift
+            best_tail_len = tail_len
 
-    release_bars = trigger_idx - struct_end
-    result.release_bars = release_bars
+    result.tail_drift_pct = round(max_directional_drift, 3)
+    result.tail_length = best_tail_len
 
-    if release_bars <= 0:
-        result.score = ReleaseLevel.FIRST
-        result.passed = True
-        result.reasoning.append("无前置释放区间 → 1st")
-        result.action_advice = "条件满足，可直接执行"
-        return result
+    # ─── 2. 评分 ───
+    drift = max_directional_drift
+    dir_label = "向上" if direction == 'bullish' else (
+        "向下" if direction == 'bearish' else "")
 
-    # ─── 2. 释放幅度计算 ───
-    window_df = df.iloc[struct_end: trigger_idx + 1]
-
-    if direction == 'bullish':
-        # 向上突破前的向上释放
-        highest = window_df['High'].max()
-        release_pct = (highest - range_high) / range_high * 100 if range_high > 0 else 0
-    else:
-        # 向下突破前的向下释放
-        lowest = window_df['Low'].min()
-        release_pct = (range_low - lowest) / range_low * 100 if range_low > 0 else 0
-
-    release_pct = max(0, release_pct)  # 不能为负
-    result.release_pct = round(release_pct, 3)
-
-    # 释放速度
-    release_speed = release_pct / release_bars if release_bars > 0 else 0
-    result.release_speed = round(release_speed, 4)
-
-    # ─── 3. 评分 ───
-    if (release_pct < config.sf_first_max_pct and
-            release_bars <= config.sf_first_max_bars):
+    if drift <= config.sf_tail_drift_1st_max:
         result.score = ReleaseLevel.FIRST
         result.passed = True
         result.reasoning.append(
-            f"释放{release_pct:.2f}%（<{config.sf_first_max_pct}%），"
-            f"{release_bars}根K线（≤{config.sf_first_max_bars}） → 1st"
+            f"结构尾部水平，{dir_label}偏移{drift:.2f}%"
+            f"（≤{config.sf_tail_drift_1st_max}%） → 1st"
         )
-        result.action_advice = "条件满足，可直接执行"
+        result.action_advice = "无明显释放，条件满足可直接做"
 
-    elif (release_pct < config.sf_second_max_pct and
-          release_bars <= config.sf_second_max_bars):
+    elif drift <= config.sf_tail_drift_2nd_max:
         result.score = ReleaseLevel.SECOND
         result.passed = True
         result.reasoning.append(
-            f"释放{release_pct:.2f}%，{release_bars}根K线 → 2nd"
+            f"尾部{dir_label}蹭了一点，偏移{drift:.2f}%"
+            f"（≤{config.sf_tail_drift_2nd_max}%），动能有一定消耗 → 2nd"
         )
-        result.action_advice = "需等待回踩平台位后再执行"
+        result.action_advice = "动能有一定消耗，需再等一段调整"
 
     else:
         result.score = ReleaseLevel.THIRD
         result.passed = False
         result.reasoning.append(
-            f"释放{release_pct:.2f}%，{release_bars}根K线，释放过大 → 3rd"
+            f"尾部{dir_label}蹭幅度很大，偏移{drift:.2f}%"
+            f"（>{config.sf_tail_drift_2nd_max}%），动能已消耗完 → 3rd"
         )
-        result.action_advice = "释放过大，需等待全新独立结构"
+        result.action_advice = "动能已消耗完，需等待全新独立结构"
 
     return result

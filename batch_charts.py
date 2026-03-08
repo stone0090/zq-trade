@@ -32,7 +32,7 @@ def main():
             time.sleep(2)
 
         try:
-            df = fetch_kline_smart(symbol=symbol, end_date=end_date, bars=500)
+            df = fetch_kline_smart(symbol=symbol, end_date=end_date, bars=400)
         except Exception as e:
             print(f"数据获取失败: {e}")
             continue

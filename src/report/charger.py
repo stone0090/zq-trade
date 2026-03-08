@@ -20,7 +20,7 @@ import pandas as pd
 import numpy as np
 
 from src.analyzer.base import (
-    ScoreCard, GradeScore, PassFail, ReleaseLevel
+    ScoreCard, GradeScore, ReleaseLevel
 )
 
 
@@ -65,8 +65,6 @@ _COLORS = {
 
 def _score_color(score) -> str:
     """评分等级 → 颜色"""
-    if isinstance(score, PassFail):
-        return '#27AE60' if score == PassFail.S else '#E74C3C'
     if isinstance(score, GradeScore):
         return {
             GradeScore.S: '#27AE60',
@@ -152,12 +150,18 @@ def _build_chart(df: pd.DataFrame, card: ScoreCard) -> plt.Figure:
         title += f"  ({s} ~ {e})"
     ax_main.set_title(title, fontproperties=_FONT_TITLE, pad=10)
 
-    # 叠加标注: 只绘制 DL 和 PT
+    # 叠加标注: DL / PT / TY / DN
     if card.dl_result:
         _draw_dl(ax_main, card.dl_result, df)
 
     if card.pt_result and not card.early_terminated:
-        _draw_pt(ax_main, card.pt_result, card.dl_result)
+        _draw_pt(ax_main, card.pt_result, card.dl_result, market=card.market)
+
+    if card.ty_result and card.dl_result:
+        _draw_ty(ax_main, card.ty_result, card.dl_result, df)
+
+    if card.dn_result and card.dl_result:
+        _draw_dn(ax_main, ax_vol, card.dn_result, card.dl_result, df)
 
     # 底部精简结论 (用 fig.text 直接写在图表底部边距)
     _draw_summary(fig, card)
@@ -210,7 +214,7 @@ _COLORS_PT_RES = '#E74C3C'  # 阻力位红色
 _COLORS_PT_SUP = '#2980B9'  # 支撑位蓝色
 
 
-def _draw_pt(ax, pt, dl):
+def _draw_pt(ax, pt, dl, market='cn'):
     """绘制 PT 上下平台区间: 阻力区间(红) + 支撑区间(蓝) + 触碰点"""
     if not dl or dl.kline_count == 0:
         return
@@ -228,8 +232,8 @@ def _draw_pt(ax, pt, dl):
                            pt.resistance_score,
                            _COLORS_PT_RES, '阻力')
 
-    # 绘制支撑区间（下平台）
-    if pt.support_price > 0:
+    # 绘制支撑区间（下平台）— A股跳过
+    if pt.support_price > 0 and market != 'cn':
         _draw_one_platform(ax, start, end,
                            pt.support_price,
                            pt.support_zone_high,
@@ -285,6 +289,141 @@ def _draw_one_platform(ax, start, end, price, zone_high, zone_low,
 
 
 
+# ─── TY 统一区间 ───
+
+def _draw_ty(ax, ty, dl, df):
+    """
+    绘制 TY 挤压区间：在K线图上用半透明橙色矩形标注小K线密集区。
+    """
+    if ty.squeeze_length == 0:
+        return
+
+    start = ty.squeeze_start_idx
+    end = ty.squeeze_end_idx
+    color = _COLORS['ty']  # 橙色
+
+    # 获取挤压区间的价格范围
+    seg = df.iloc[start:end + 1] if end + 1 <= len(df) else df.iloc[start:]
+    if len(seg) == 0:
+        return
+
+    y_lo = seg['Low'].min()
+    y_hi = seg['High'].max()
+    pad = (y_hi - y_lo) * 0.15  # 上下留一点余量
+    y_lo -= pad
+    y_hi += pad
+
+    # 半透明矩形
+    alpha = 0.15 if ty.score.value >= GradeScore.A.value else 0.08
+    rect = patches.Rectangle(
+        (start, y_lo), end - start, y_hi - y_lo,
+        linewidth=1.0, linestyle='--',
+        edgecolor=color, facecolor=color, alpha=alpha,
+        zorder=3
+    )
+    ax.add_patch(rect)
+
+    # 左侧竖线标注起点
+    ax.plot([start, start], [y_lo, y_hi],
+            color=color, linewidth=0.8, linestyle='--', alpha=0.4, zorder=4)
+
+    # 标签在挤压区上方
+    label = f"TY {ty.squeeze_length}K ({ty.score})"
+    ax.text((start + end) / 2, y_hi + pad * 0.3, label,
+            fontproperties=_FONT, color=color,
+            fontsize=7, ha='center', va='bottom', zorder=10,
+            bbox=dict(boxstyle='round,pad=0.15', facecolor='white',
+                      edgecolor=color, alpha=0.7))
+
+
+# ─── DN 动能 ───
+
+def _draw_dn(ax, ax_vol, dn, dl, df):
+    """
+    绘制 DN 突破K线标注：
+    - 非Pending时：在触发K线处画竖线 + 三角箭头标记方向
+    - Pending时：在结构末端标注 "DN?" 等待标记
+    """
+    if dn.pending:
+        # Pending: 在结构末端标注等待
+        end = dl.structure_end_idx
+        y_low, y_high = ax.get_ylim()
+        y_range = y_high - y_low
+        ax.text(end + 2, y_low + y_range * 0.12, "DN?",
+                fontproperties=_FONT, color='#999999',
+                fontsize=9, ha='left', va='center', zorder=10,
+                fontweight='bold',
+                bbox=dict(boxstyle='round,pad=0.2', facecolor='#f0f0f0',
+                          edgecolor='#999999', alpha=0.8))
+        return
+
+    if dn.trigger_idx < 0 or dn.trigger_idx >= len(df):
+        return
+
+    idx = dn.trigger_idx
+    is_bull = (dn.direction == 'bullish')
+    color = _COLORS['dn_bull'] if is_bull else _COLORS['dn_bear']
+
+    # 获取触发K线的价格
+    row = df.iloc[idx]
+    trigger_high = row['High']
+    trigger_low = row['Low']
+    trigger_close = row['Close']
+
+    # 竖线贯穿触发K线
+    y_low, y_high = ax.get_ylim()
+    y_range = y_high - y_low
+    line_top = trigger_high + y_range * 0.06
+    line_bottom = trigger_low - y_range * 0.06
+
+    ax.plot([idx, idx], [line_bottom, line_top],
+            color=color, linewidth=1.5, linestyle='-', alpha=0.6, zorder=7)
+
+    # 三角箭头标记方向
+    if is_bull:
+        # 向上三角 ▲
+        arrow_y = line_top
+        ax.plot(idx, arrow_y, marker='^', color=color,
+                markersize=10, zorder=8)
+    else:
+        # 向下三角 ▼
+        arrow_y = line_bottom
+        ax.plot(idx, arrow_y, marker='v', color=color,
+                markersize=10, zorder=8)
+
+    # 如果是合并K线，用浅色背景标注合并范围
+    if dn.merged_count > 1:
+        merge_start = max(0, idx - dn.merged_count + 1)
+        merge_seg = df.iloc[merge_start:idx + 1]
+        m_lo = merge_seg['Low'].min()
+        m_hi = merge_seg['High'].max()
+        m_pad = (m_hi - m_lo) * 0.1
+        rect = patches.Rectangle(
+            (merge_start, m_lo - m_pad), idx - merge_start + 1, m_hi - m_lo + 2 * m_pad,
+            linewidth=0.8, linestyle=':',
+            edgecolor=color, facecolor=color, alpha=0.06,
+            zorder=3
+        )
+        ax.add_patch(rect)
+
+    # 标签
+    parts = [f"DN({dn.score})"]
+    if dn.merged_count > 1:
+        parts.append(f"{dn.merged_count}合")
+    parts.append(f"力度{dn.force_ratio:.1f}x")
+    if dn.broke_platform:
+        parts.append("破位")
+    label = " ".join(parts)
+
+    label_y = line_top + y_range * 0.015 if is_bull else line_bottom - y_range * 0.015
+    va = 'bottom' if is_bull else 'top'
+    ax.text(idx, label_y, label,
+            fontproperties=_FONT, color=color,
+            fontsize=7, ha='center', va=va, zorder=10,
+            bbox=dict(boxstyle='round,pad=0.15', facecolor='white',
+                      edgecolor=color, alpha=0.7))
+
+
 # ─── 底部评分摘要 ───
 
 def _draw_summary(fig, card: ScoreCard):
@@ -301,12 +440,12 @@ def _draw_summary(fig, card: ScoreCard):
                 color = '#888888'
             else:
                 color = '#F39C12'
-            fig.text(0.08, y_pos, line,
+            fig.text(0.95, y_pos, line,
                      fontproperties=_FONT, fontsize=9, color=color,
-                     va='center')
+                     va='center', ha='right')
     else:
         grade_color = '#27AE60' if card.overall_passed else '#E74C3C'
-        grade_text = f"综合: {card.weighted_score:.2f}分  [{card.overall_grade}]"
-        fig.text(0.08, 0.05, grade_text,
+        grade_text = f"综合: {card.overall_grade}"
+        fig.text(0.95, 0.05, grade_text,
                  fontproperties=_FONT, fontsize=9, color=grade_color,
-                 va='center', fontweight='bold')
+                 va='center', ha='right', fontweight='bold')

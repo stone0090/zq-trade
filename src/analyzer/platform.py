@@ -2,8 +2,8 @@
 PT 平台位/颈线位检测
 
 在DL识别出的盘整结构内，同时检测上平台（阻力位）和下平台（支撑位）。
-向上突破时关注阻力平台，向下突破时关注支撑平台。
-DN确定方向后激活对应平台。
+要求3次以上有效测试，测试间隔理想20根以上K线。
+影线/实体穿越分级评分。DN确定方向后激活对应平台。
 """
 import numpy as np
 import pandas as pd
@@ -14,11 +14,13 @@ from src.utils.helpers import calc_atr, price_clustering, candle_body
 
 def analyze_platform(df: pd.DataFrame,
                      structure: StructureResult,
-                     config: AnalyzerConfig = None) -> PlatformResult:
+                     config: AnalyzerConfig = None,
+                     market: str = 'cn') -> PlatformResult:
     """
     PT 平台位/颈线位分析。
 
     同时检测上平台(阻力)和下平台(支撑)，分别评分存储。
+    A股(market='cn')只检测阻力位，跳过支撑位。
     激活平台的选择由后续DN方向决定。
     """
     if config is None:
@@ -26,8 +28,8 @@ def analyze_platform(df: pd.DataFrame,
 
     result = PlatformResult()
 
-    if not structure.passed:
-        result.reasoning.append("DL未通过，跳过PT分析")
+    if not structure.passed and structure.kline_count == 0:
+        result.reasoning.append("DL未检测到结构，跳过PT分析")
         return result
 
     start = structure.structure_start_idx
@@ -49,10 +51,8 @@ def analyze_platform(df: pd.DataFrame,
         bin_width = 0.01
 
     tolerance = base_atr * config.pt_touch_tolerance_atr_ratio
-    pen_tolerance = base_atr * 0.5  # 穿透判定用更宽的容忍度
 
     # ─── 1. 生成候选平台位 ───
-    # 阻力位: 从结构上部区域的High聚类（取P70以上的High值）
     highs = struct_df['High'].values
     lows = struct_df['Low'].values
     high_threshold = np.percentile(highs, 70)
@@ -73,13 +73,17 @@ def analyze_platform(df: pd.DataFrame,
 
     # ─── 2. 分别找出最佳阻力位和最佳支撑位 ───
     best_resistance = _find_best_candidate(
-        struct_df, resistance_candidates, 'resistance', tolerance, pen_tolerance,
+        struct_df, resistance_candidates, 'resistance', tolerance,
         config.pt_min_touch_interval, base_atr, config
     )
-    best_support = _find_best_candidate(
-        struct_df, support_candidates, 'support', tolerance, pen_tolerance,
-        config.pt_min_touch_interval, base_atr, config
-    )
+    # A股只检测阻力位，跳过支撑位
+    if market == 'cn':
+        best_support = None
+    else:
+        best_support = _find_best_candidate(
+            struct_df, support_candidates, 'support', tolerance,
+            config.pt_min_touch_interval, base_atr, config
+        )
 
     # ─── 3. 存储阻力位结果 ───
     if best_resistance:
@@ -89,11 +93,13 @@ def analyze_platform(df: pd.DataFrame,
         result.resistance_touches = best_resistance['touches']
         result.resistance_touch_count = best_resistance['touch_count']
         result.resistance_penetrations = best_resistance['penetrations']
-        result.resistance_score = _grade_platform(
-            best_resistance['touch_count'],
-            best_resistance['penetrations'],
-            best_resistance.get('has_tail_energy', False)
-        )
+        result.resistance_shadow_penetrations = best_resistance['shadow_pens']
+        result.resistance_body_penetrations = best_resistance['body_pens']
+        result.resistance_post_pen_tests = best_resistance['post_pen_tests']
+        score, reason = _grade_platform(best_resistance, config)
+        result.resistance_score = score
+        if reason:
+            result.reasoning.append(f"阻力位{score}: {reason}")
 
     # ─── 4. 存储支撑位结果 ───
     if best_support:
@@ -103,11 +109,13 @@ def analyze_platform(df: pd.DataFrame,
         result.support_touches = best_support['touches']
         result.support_touch_count = best_support['touch_count']
         result.support_penetrations = best_support['penetrations']
-        result.support_score = _grade_platform(
-            best_support['touch_count'],
-            best_support['penetrations'],
-            best_support.get('has_tail_energy', False)
-        )
+        result.support_shadow_penetrations = best_support['shadow_pens']
+        result.support_body_penetrations = best_support['body_pens']
+        result.support_post_pen_tests = best_support['post_pen_tests']
+        score, reason = _grade_platform(best_support, config)
+        result.support_score = score
+        if reason:
+            result.reasoning.append(f"支撑位{score}: {reason}")
 
     # ─── 5. 尾部能量释放检测 ───
     tail_window = min(config.pt_tail_window, len(struct_df))
@@ -124,7 +132,6 @@ def analyze_platform(df: pd.DataFrame,
     result.has_tail_energy = has_tail_energy
 
     # ─── 6. 暂时不设置激活平台（等DN方向确定后由 activate_platform 设置）
-    # 此处先以较优的一侧作为临时值，供DN分析使用
     r_score = result.resistance_score.value if best_resistance else 0
     s_score = result.support_score.value if best_support else 0
 
@@ -141,13 +148,17 @@ def analyze_platform(df: pd.DataFrame,
     result.reasoning.append(
         f"阻力区间: {result.resistance_zone_low:.3f}~{result.resistance_zone_high:.3f} "
         f"(中心 {result.resistance_price:.3f}, "
-        f"{result.resistance_touch_count}次触碰/{result.resistance_penetrations}次穿透, "
+        f"{result.resistance_touch_count}次测试/"
+        f"影线穿{result.resistance_shadow_penetrations}次/"
+        f"实体穿{result.resistance_body_penetrations}次, "
         f"{result.resistance_score})"
     )
     result.reasoning.append(
         f"支撑区间: {result.support_zone_low:.3f}~{result.support_zone_high:.3f} "
         f"(中心 {result.support_price:.3f}, "
-        f"{result.support_touch_count}次触碰/{result.support_penetrations}次穿透, "
+        f"{result.support_touch_count}次测试/"
+        f"影线穿{result.support_shadow_penetrations}次/"
+        f"实体穿{result.support_body_penetrations}次, "
         f"{result.support_score})"
     )
     result.reasoning.append(f"ATR基准: {base_atr:.3f}")
@@ -196,29 +207,37 @@ def _set_active(pt: PlatformResult, pt_type: str):
     pt.passed = pt.score.value >= GradeScore.B.value
 
 
-def _find_best_candidate(struct_df, candidates, pt_type, tolerance, pen_tolerance,
+def _find_best_candidate(struct_df, candidates, pt_type, tolerance,
                          min_interval, base_atr, config):
     """
     从候选列表中找出最佳平台位。
 
-    区间宽度动态决定: 基于实际触碰点价格分布 + K线实体均宽作为padding,
-    使区间自然适应K线轮廓粗细。
+    区间宽度动态决定: 基于实际触碰点价格分布 + K线实体均宽作为padding。
     """
     best = None
     best_score = float('-inf')
 
-    # K线实体均宽: 反映整体K线"粗细"
     avg_body = (struct_df['Close'] - struct_df['Open']).abs().mean()
 
     for center_price, freq in candidates:
         touches = _count_touches(struct_df, center_price, tolerance,
                                  min_interval, pt_type)
-        penetrations = _count_penetrations(struct_df, center_price, pen_tolerance, pt_type)
+        shadow_pens, body_pens, pen_events = _count_penetrations_detailed(
+            struct_df, center_price, tolerance, pt_type
+        )
 
-        # 穿透视为对平台位的有效测试（中性偏正面），不重罚
-        candidate_score = len(touches) * 3 + penetrations * 1
+        # 实体穿越后的有效测试次数
+        post_pen_tests = 0
+        if body_pens > 0:
+            post_pen_tests = _count_post_penetration_tests(
+                struct_df, center_price, tolerance, pt_type
+            )
 
-        # 动态区间: 触碰点实际分布范围 + 实体均宽作为padding
+        total_pens = shadow_pens + body_pens
+        # 候选评分: 测试次数优先，穿越是瑕疵
+        candidate_score = len(touches) * 3 - body_pens * 2 - shadow_pens * 1
+
+        # 动态区间
         if touches:
             touch_prices = [tp[1] for tp in touches]
             tp_max = max(touch_prices)
@@ -229,6 +248,9 @@ def _find_best_candidate(struct_df, candidates, pt_type, tolerance, pen_toleranc
             zone_high = center_price + avg_body
             zone_low = center_price - avg_body
 
+        # 计算测试间隔的均匀性
+        avg_interval = _calc_avg_interval(touches)
+
         if candidate_score > best_score:
             best_score = candidate_score
             best = {
@@ -237,7 +259,12 @@ def _find_best_candidate(struct_df, candidates, pt_type, tolerance, pen_toleranc
                 'zone_low': zone_low,
                 'touches': touches,
                 'touch_count': len(touches),
-                'penetrations': penetrations,
+                'penetrations': total_pens,
+                'shadow_pens': shadow_pens,
+                'body_pens': body_pens,
+                'post_pen_tests': post_pen_tests,
+                'pen_events': pen_events,
+                'avg_interval': avg_interval,
                 'freq': freq,
                 'type': pt_type,
             }
@@ -248,30 +275,58 @@ def _find_best_candidate(struct_df, candidates, pt_type, tolerance, pen_toleranc
     return best
 
 
-def _grade_platform(touch_count: int, penetration_count: int,
-                    has_tail_energy: bool) -> GradeScore:
+def _grade_platform(candidate: dict, config: AnalyzerConfig) -> tuple:
     """
-    根据触碰次数和穿透事件数评分。
+    根据测试次数、穿越类型、间隔分布评分。
 
-    穿透(事件)视为对平台位的有效测试:
-    - 穿透说明价格积极测试该关键位，按0.5权重计入有效接触
-    - 穿透事件比例过高时降级
+    S: ≥3次测试，实体和影线均不穿越，间隔充分均匀
+    A: ≥3次测试，仅影线穿越；或实体穿越后又有2次以上测试
+    B: 多次穿越但仍有测试；或间隔不够
+    C: 不足3次测试
+
+    Returns:
+        (GradeScore, reason_str)
     """
-    tc = touch_count
-    pc = penetration_count
-    # 有效接触 = 纯触碰 + 穿透*0.5
-    effective = tc + pc * 0.5
-    total_contacts = tc + pc
-    pen_ratio = pc / total_contacts if total_contacts > 0 else 1.0
+    tc = candidate['touch_count']
+    shadow_pens = candidate['shadow_pens']
+    body_pens = candidate['body_pens']
+    post_pen_tests = candidate['post_pen_tests']
+    avg_interval = candidate['avg_interval']
+    min_required = config.pt_min_touch_count  # 3
+    ideal_interval = config.pt_min_touch_interval  # 20
 
-    if effective >= 5 and pc <= 1:
-        return GradeScore.S
-    elif effective >= 4 and pen_ratio <= 0.45:
-        return GradeScore.A
-    elif effective >= 2:
-        return GradeScore.B
-    else:
-        return GradeScore.C
+    # 不足3次测试 → C
+    if tc < min_required:
+        return GradeScore.C, f"仅{tc}次测试（不足{min_required}次）"
+
+    # ≥3次测试，实体和影线均不穿越，间隔充分
+    if body_pens == 0 and shadow_pens == 0 and avg_interval >= ideal_interval:
+        return GradeScore.S, ""
+
+    # ≥3次测试，仅影线穿越（实体未穿越）
+    if body_pens == 0 and shadow_pens > 0:
+        return GradeScore.A, f"影线穿越{shadow_pens}次（实体未穿越）"
+
+    # 实体穿越后又有2次以上测试 → A
+    if body_pens > 0 and post_pen_tests >= 2:
+        return GradeScore.A, f"实体穿越{body_pens}次，但穿越后有{post_pen_tests}次测试恢复"
+
+    # 实体穿越后不足2次测试 → 直接C（恢复不够，平台无效）
+    if body_pens > 0 and post_pen_tests < 2:
+        return GradeScore.C, f"实体穿越{body_pens}次，穿越后仅{post_pen_tests}次测试（恢复不够）"
+
+    # 有穿越但还有测试；或间隔不够
+    if tc >= min_required:
+        reasons = []
+        if body_pens > 0:
+            reasons.append(f"实体穿越{body_pens}次")
+        if shadow_pens > 0:
+            reasons.append(f"影线穿越{shadow_pens}次")
+        if avg_interval < ideal_interval:
+            reasons.append(f"测试间隔{avg_interval:.0f}根偏短")
+        return GradeScore.B, "、".join(reasons) if reasons else "穿越较多"
+
+    return GradeScore.C, f"仅{tc}次测试"
 
 
 def _count_touches(struct_df: pd.DataFrame, price: float,
@@ -305,26 +360,91 @@ def _count_touches(struct_df: pd.DataFrame, price: float,
     return touches
 
 
-def _count_penetrations(struct_df: pd.DataFrame, price: float,
-                        tolerance: float, pt_type: str) -> int:
+def _count_penetrations_detailed(struct_df: pd.DataFrame, price: float,
+                                 tolerance: float, pt_type: str) -> tuple:
     """
-    统计穿过平台位的事件次数（连续穿透段只计一次）。
+    分别统计影线穿越和实体穿越次数。
 
-    对于支撑平台: 实体(body_high)完全收在平台价下方 → 一次穿透事件
-    对于阻力平台: 实体(body_low)完全收在平台价上方 → 一次穿透事件
+    影线穿越: 影线超过平台位但实体没有穿过
+    实体穿越: 实体完全穿过平台位（连续穿透段只计一次事件）
+
+    Returns:
+        (shadow_pen_count, body_pen_count, pen_event_indices)
     """
-    count = 0
-    was_penetrating = False
-    for _, row in struct_df.iterrows():
+    shadow_count = 0
+    body_count = 0
+    pen_events = []
+    was_body_pen = False
+
+    for i in range(len(struct_df)):
+        row = struct_df.iloc[i]
         body_low, body_high = candle_body(row['Open'], row['Close'])
 
         if pt_type == 'support':
-            is_pen = body_high < price - tolerance
+            # 影线穿越: Low穿过了但实体没有
+            shadow_pen = row['Low'] < price - tolerance and body_low >= price - tolerance
+            # 实体穿越: 实体完全在平台价下方
+            body_pen = body_high < price - tolerance
         else:
-            is_pen = body_low > price + tolerance
+            # 影线穿越: High穿过了但实体没有
+            shadow_pen = row['High'] > price + tolerance and body_high <= price + tolerance
+            # 实体穿越: 实体完全在平台价上方
+            body_pen = body_low > price + tolerance
 
-        if is_pen and not was_penetrating:
-            count += 1
-        was_penetrating = is_pen
+        if shadow_pen:
+            shadow_count += 1
+
+        if body_pen and not was_body_pen:
+            body_count += 1
+            pen_events.append(i)
+        was_body_pen = body_pen
+
+    return shadow_count, body_count, pen_events
+
+
+def _count_post_penetration_tests(struct_df: pd.DataFrame, price: float,
+                                  tolerance: float, pt_type: str) -> int:
+    """
+    统计最后一次实体穿越之后的有效测试次数。
+    """
+    # 找到最后一次实体穿越的位置
+    last_pen_idx = -1
+    was_body_pen = False
+    for i in range(len(struct_df)):
+        row = struct_df.iloc[i]
+        body_low, body_high = candle_body(row['Open'], row['Close'])
+
+        if pt_type == 'support':
+            body_pen = body_high < price - tolerance
+        else:
+            body_pen = body_low > price + tolerance
+
+        if body_pen and not was_body_pen:
+            last_pen_idx = i
+        was_body_pen = body_pen
+
+    if last_pen_idx < 0:
+        return 0
+
+    # 穿越后的有效测试次数
+    count = 0
+    for i in range(last_pen_idx + 1, len(struct_df)):
+        row = struct_df.iloc[i]
+        if pt_type == 'support':
+            if abs(row['Low'] - price) <= tolerance and row['Close'] >= price:
+                count += 1
+        else:
+            if abs(row['High'] - price) <= tolerance and row['Close'] <= price:
+                count += 1
 
     return count
+
+
+def _calc_avg_interval(touches: list) -> float:
+    """计算相邻测试之间的平均间隔K线数。"""
+    if len(touches) < 2:
+        return 0.0
+    intervals = []
+    for i in range(1, len(touches)):
+        intervals.append(touches[i][0] - touches[i - 1][0])
+    return sum(intervals) / len(intervals) if intervals else 0.0

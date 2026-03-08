@@ -67,7 +67,7 @@ class PassFail(Enum):
 @dataclass
 class StructureResult:
     """DL 独立结构检测结果"""
-    score: PassFail = PassFail.FAIL
+    score: GradeScore = GradeScore.C
     passed: bool = False
     kline_count: int = 0
     range_high: float = 0.0
@@ -75,8 +75,8 @@ class StructureResult:
     range_pct: float = 0.0
     structure_start_idx: int = 0
     structure_end_idx: int = 0
-    prior_trend_slope: float = 0.0
-    structure_slope: float = 0.0
+    prior_trend_slope: float = 0.0     # 带符号归一化斜率: 负=下跌, 正=上涨
+    structure_slope: float = 0.0       # 带符号归一化斜率: 负=右下倾, 正=右上倾
     flaws: list = field(default_factory=list)
     reasoning: list = field(default_factory=list)
 
@@ -103,6 +103,9 @@ class PlatformResult:
     resistance_touches: list = field(default_factory=list)
     resistance_touch_count: int = 0
     resistance_penetrations: int = 0
+    resistance_shadow_penetrations: int = 0    # 影线穿越次数
+    resistance_body_penetrations: int = 0      # 实体穿越次数
+    resistance_post_pen_tests: int = 0         # 实体穿越后的有效测试次数
     resistance_score: GradeScore = GradeScore.C
 
     # 下平台（支撑位）
@@ -112,10 +115,12 @@ class PlatformResult:
     support_touches: list = field(default_factory=list)
     support_touch_count: int = 0
     support_penetrations: int = 0
+    support_shadow_penetrations: int = 0       # 影线穿越次数
+    support_body_penetrations: int = 0         # 实体穿越次数
+    support_post_pen_tests: int = 0            # 实体穿越后的有效测试次数
     support_score: GradeScore = GradeScore.C
 
     has_tail_energy: bool = False
-    has_adjustment_before_3rd: bool = True
     all_candidates: list = field(default_factory=list)
     reasoning: list = field(default_factory=list)
 
@@ -133,6 +138,10 @@ class ContourResult:
     abnormal_ratio: float = 0.0
     width_pct: float = 0.0
     is_narrow: bool = False
+    symmetry_score: float = 0.0       # 前后半段对称性 [0,1]
+    tail_break: bool = False           # 尾部是否破位（突破前期低点）
+    tail_break_pct: float = 0.0       # 尾部破位幅度%
+    density_score: float = 0.0        # 中间段密集度 [0,1]
     reasoning: list = field(default_factory=list)
 
 
@@ -171,12 +180,12 @@ class MomentumResult:
 
 @dataclass
 class ReleaseResult:
-    """SF 释放级别评估结果"""
+    """SF 释放级别评估结果（尾部向突破方向蹭的程度）"""
     score: ReleaseLevel = ReleaseLevel.THIRD
     passed: bool = False
-    release_pct: float = 0.0
-    release_bars: int = 0
-    release_speed: float = 0.0
+    tail_drift_pct: float = 0.0       # 尾部方向性偏移百分比
+    tail_length: int = 0              # 检测到的尾部长度（K线数）
+    direction: str = ""               # 评估方向: bullish/bearish/unknown
     action_advice: str = ""
     reasoning: list = field(default_factory=list)
 
@@ -202,11 +211,11 @@ class ScoreCard:
     sf_result: Optional[ReleaseResult] = None
 
     overall_passed: bool = False
-    weighted_score: float = 0.0
     overall_grade: str = ""
     action_recommendation: str = ""
+    position_size: str = ""          # "1R" / "0.5R" / "等待" / "不做"
+    position_reason: str = ""        # 仓位判定理由
     conclusion_lines: list = field(default_factory=list)
-    disqualify_reasons: list = field(default_factory=list)
     early_terminated: bool = False
     early_terminate_reason: str = ""
 
@@ -218,19 +227,21 @@ class AnalyzerConfig:
     """所有量化阈值集中管理"""
 
     # DL 独立结构
-    dl_min_klines: int = 60               # 最少K线数
-    dl_min_klines_relaxed: int = 30       # 经验放宽最低值
+    dl_min_klines: int = 90               # 最少K线数（硬门槛）
     dl_flat_slope_threshold: float = 0.30  # 盘整斜率阈值 (%/K线)
     dl_window_size: int = 20               # 滑动窗口大小
     dl_noise_tolerance: int = 15           # 盘整段内允许的趋势噪声窗口数
     dl_steep_decline_threshold: float = 0.50  # 前趋势急跌阈值
     dl_tilt_threshold: float = 0.08        # 结构右倾阈值
-    dl_concentration_threshold: float = 0.05  # 筹码集中度阈值(std/mean)
+    dl_concentration_threshold: float = 0.05  # 筹码集中度阈值(std/mean)（仅记录）
+    dl_max_drift_pct: float = 5.0              # 端点漂移阈值(%)，超过则收窄结构
+    dl_max_range_pct: float = 7.0              # 结构最大振幅(%)，超过则收窄结构
 
     # PT 平台位
     pt_bin_width_atr_ratio: float = 0.1    # 直方图bin宽度 = ATR * ratio
     pt_touch_tolerance_atr_ratio: float = 0.15  # 触碰容忍带宽
-    pt_min_touch_interval: int = 5         # 相邻触碰最小间隔K线数
+    pt_min_touch_count: int = 3            # 最少测试次数（硬性要求）
+    pt_min_touch_interval: int = 20        # 相邻触碰理想间隔K线数
     pt_tail_window: int = 10               # 尾部能量检测窗口
     pt_tail_energy_range_mult: float = 2.0  # 大K线判定倍数(vs ATR)
     pt_tail_energy_vol_mult: float = 2.0   # 放量判定倍数(vs 均量)
@@ -262,19 +273,7 @@ class AnalyzerConfig:
     dn_volume_ratio_s: float = 2.0         # S级放量阈值
     dn_max_merged: int = 3                 # 最大合并K线数
 
-    # SF 释放级别
-    sf_first_max_pct: float = 1.0          # 1st级最大释放百分比
-    sf_first_max_bars: int = 2             # 1st级最大释放K线数
-    sf_second_max_pct: float = 3.0         # 2nd级最大释放百分比
-    sf_second_max_bars: int = 8            # 2nd级最大释放K线数
-
-    # 综合评分权重
-    weight_pt: float = 0.30
-    weight_dn: float = 0.30
-    weight_ty: float = 0.25
-    weight_lk: float = 0.15
-
-    # 综合评级阈值
-    grade_excellent: float = 3.5
-    grade_qualified: float = 2.8
-    grade_marginal: float = 2.0
+    # SF 释放级别（尾部向突破方向蹭的程度）
+    sf_tail_drift_1st_max: float = 1.5    # 1st级最大尾部偏移(%)
+    sf_tail_drift_2nd_max: float = 4.0    # 2nd级最大尾部偏移(%)
+    # 超过2nd阈值 → 3rd

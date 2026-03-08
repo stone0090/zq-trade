@@ -6,7 +6,7 @@
 import sys
 
 from src.analyzer.base import (
-    ScoreCard, GradeScore, ReleaseLevel, PassFail
+    ScoreCard, GradeScore, ReleaseLevel
 )
 
 
@@ -58,8 +58,6 @@ def _grade_color(score) -> str:
     if isinstance(score, GradeScore):
         return {GradeScore.S: 'green', GradeScore.A: 'green',
                 GradeScore.B: 'yellow', GradeScore.C: 'red'}.get(score, 'reset')
-    if isinstance(score, PassFail):
-        return 'green' if score == PassFail.S else 'red'
     if isinstance(score, ReleaseLevel):
         return {ReleaseLevel.FIRST: 'green', ReleaseLevel.SECOND: 'yellow',
                 ReleaseLevel.THIRD: 'red'}.get(score, 'reset')
@@ -70,8 +68,6 @@ def _bar(score, max_width: int = 24) -> str:
     """生成评分进度条"""
     if isinstance(score, GradeScore):
         ratio = score.value / 4.0
-    elif isinstance(score, PassFail):
-        ratio = 1.0 if score == PassFail.S else 0.0
     elif isinstance(score, ReleaseLevel):
         ratio = {ReleaseLevel.FIRST: 1.0, ReleaseLevel.SECOND: 0.6,
                  ReleaseLevel.THIRD: 0.2}.get(score, 0)
@@ -84,9 +80,7 @@ def _bar(score, max_width: int = 24) -> str:
 def _format_score_tag(score) -> str:
     """格式化评分标签"""
     color = _grade_color(score)
-    if isinstance(score, PassFail):
-        label = "S 通过" if score == PassFail.S else "FAIL"
-    elif isinstance(score, GradeScore):
+    if isinstance(score, GradeScore):
         labels = {GradeScore.S: 'S 优秀', GradeScore.A: 'A 良好',
                   GradeScore.B: 'B 合格', GradeScore.C: 'C 不足'}
         label = labels.get(score, str(score))
@@ -148,24 +142,28 @@ def print_score_card(card: ScoreCard):
                 print(f"    上平台(阻力): {pt.resistance_zone_low:.3f}"
                       f"~{pt.resistance_zone_high:.3f}  "
                       f"({pt.resistance_touch_count}次触碰/"
-                      f"{pt.resistance_penetrations}次穿透, "
+                      f"影线透{pt.resistance_shadow_penetrations}/"
+                      f"实体透{pt.resistance_body_penetrations}, "
                       f"{pt.resistance_score})")
             else:
                 print(f"    上平台(阻力): {pt.resistance_price:.3f}  "
                       f"({pt.resistance_touch_count}次触碰/"
-                      f"{pt.resistance_penetrations}次穿透, "
+                      f"影线透{pt.resistance_shadow_penetrations}/"
+                      f"实体透{pt.resistance_body_penetrations}, "
                       f"{pt.resistance_score})")
-        if pt.support_price > 0:
+        if pt.support_price > 0 and card.market != 'cn':
             if pt.support_zone_high > 0:
                 print(f"    下平台(支撑): {pt.support_zone_low:.3f}"
                       f"~{pt.support_zone_high:.3f}  "
                       f"({pt.support_touch_count}次触碰/"
-                      f"{pt.support_penetrations}次穿透, "
+                      f"影线透{pt.support_shadow_penetrations}/"
+                      f"实体透{pt.support_body_penetrations}, "
                       f"{pt.support_score})")
             else:
                 print(f"    下平台(支撑): {pt.support_price:.3f}  "
                       f"({pt.support_touch_count}次触碰/"
-                      f"{pt.support_penetrations}次穿透, "
+                      f"影线透{pt.support_shadow_penetrations}/"
+                      f"实体透{pt.support_body_penetrations}, "
                       f"{pt.support_score})")
         for r in pt.reasoning:
             _print_reasoning(r)
@@ -179,6 +177,17 @@ def print_score_card(card: ScoreCard):
               f"振幅CV: {lk.range_cv:.3f}  |  "
               f"异常K线: {lk.abnormal_count}根({lk.abnormal_ratio:.1%})")
         for r in lk.reasoning:
+            _print_reasoning(r)
+
+    # ─── SF ───
+    if card.sf_result:
+        sf = card.sf_result
+        print()
+        print(f"  SF 释放级别  {_bar(sf.score)}  {_format_score_tag(sf.score)}")
+        print(f"    尾部偏移: {sf.tail_drift_pct:.2f}%  |  "
+              f"尾长: {sf.tail_length}根  |  "
+              f"方向: {sf.direction or '未定'}")
+        for r in sf.reasoning:
             _print_reasoning(r)
 
     # ─── TY ───
@@ -210,16 +219,6 @@ def print_score_card(card: ScoreCard):
             for r in dn.reasoning:
                 _print_reasoning(r)
 
-    # ─── SF ───
-    if card.sf_result:
-        sf = card.sf_result
-        print()
-        print(f"  SF 释放级别  {_bar(sf.score)}  {_format_score_tag(sf.score)}")
-        print(f"    释放: {sf.release_pct:.2f}%  |  "
-              f"K线数: {sf.release_bars}根")
-        for r in sf.reasoning:
-            _print_reasoning(r)
-
     _print_footer(card, w)
 
 
@@ -250,27 +249,23 @@ def _print_footer(card: ScoreCard, w: int):
             print(f"  {_c(line, color)}")
         print()
 
+    # 仓位建议
+    if card.position_size:
+        pos_colors = {'1R': 'green', '0.5R': 'yellow', '等待': 'yellow', '不做': 'red'}
+        pos_color = pos_colors.get(card.position_size, 'reset')
+        print(f"  仓位: {_c(card.position_size, pos_color)}")
+        if card.position_reason:
+            print(f"    > {card.position_reason}")
+        print()
+
     if card.overall_passed:
         grade_color = 'green'
-    elif card.disqualify_reasons:
+    elif card.early_terminated:
         grade_color = 'red'
     else:
         grade_color = 'yellow'
 
-    stars = ''
-    if card.weighted_score > 0:
-        star_count = min(5, int(card.weighted_score / 4 * 5 + 0.5))
-        stars = '*' * star_count + '.' * (5 - star_count)
-        print(f"  综合评级: {_c(stars, grade_color)}  "
-              f"{_c(card.overall_grade, grade_color)}  "
-              f"(加权得分: {card.weighted_score})")
-    else:
-        print(f"  综合评级: {_c(card.overall_grade, grade_color)}")
-
-    if card.disqualify_reasons:
-        print()
-        for reason in card.disqualify_reasons:
-            print(f"  {_c('X', 'red')} {reason}")
+    print(f"  综合评级: {_c(card.overall_grade, grade_color)}")
 
     print('=' * w)
     print()

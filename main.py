@@ -5,7 +5,7 @@
     python main.py analyze <symbol> [options]
 
 示例:
-    python main.py analyze 600802                    # 默认到今天，取500根
+    python main.py analyze 600802                    # 默认到今天，取400根
     python main.py analyze 600802 --end 2026-03-07   # 指定截止日期
     python main.py analyze 600802 --chart            # 生成K线分析图表
 """
@@ -27,8 +27,8 @@ def main():
     p_analyze = subparsers.add_parser('analyze', help='分析单只股票的开仓条件')
     p_analyze.add_argument('symbol', help='股票代码，如 600802')
     p_analyze.add_argument('--end', help='截止日期 YYYY-MM-DD（默认今天）')
-    p_analyze.add_argument('--bars', type=int, default=500,
-                           help='获取K线根数（默认500）')
+    p_analyze.add_argument('--bars', type=int, default=400,
+                           help='获取K线根数（默认400）')
     p_analyze.add_argument('--no-cache', action='store_true', help='禁用数据缓存')
     p_analyze.add_argument('--chart', action='store_true', help='生成K线分析图表（PNG）')
 

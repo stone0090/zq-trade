@@ -46,7 +46,7 @@ def _cache_path(symbol: str) -> Path:
 
 def fetch_kline_smart(symbol: str,
                       end_date: str = None,
-                      bars: int = 500) -> pd.DataFrame:
+                      bars: int = 400) -> pd.DataFrame:
     """
     智能增量获取小时K线数据。
 
@@ -58,7 +58,7 @@ def fetch_kline_smart(symbol: str,
     Args:
         symbol: 股票代码（纯数字=A股，含字母=美股）
         end_date: 截止日期 'YYYY-MM-DD'，默认今天
-        bars: 目标K线根数，默认500
+        bars: 目标K线根数，默认400
 
     Returns:
         DataFrame(Open, High, Low, Close, Volume)，索引为 DatetimeIndex

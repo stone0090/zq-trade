@@ -26,7 +26,7 @@ def grade_str(score) -> str:
 def run_one(symbol: str, end_date: str):
     """运行单个案例，返回各维度结果字典"""
     try:
-        df = fetch_kline_smart(symbol=symbol, end_date=end_date, bars=500)
+        df = fetch_kline_smart(symbol=symbol, end_date=end_date, bars=400)
     except Exception as e:
         return {'error': str(e)}
 
@@ -38,7 +38,7 @@ def run_one(symbol: str, end_date: str):
     card.market = detect_market(symbol)
 
     result = {
-        'DL': 'S' if (card.dl_result and card.dl_result.passed) else 'F',
+        'DL': grade_str(card.dl_result.score) if card.dl_result else 'F',
         'PT': '?',
         'PT_detail': '',
         'LK': '?',
@@ -82,8 +82,8 @@ def run_one(symbol: str, end_date: str):
     if card.sf_result:
         result['SF'] = grade_str(card.sf_result.score)
         sf = card.sf_result
-        result['SF_detail'] = (f"释放{sf.release_pct:.2f}%/{sf.release_bars}根 "
-                                f"速度{sf.release_speed:.4f}")
+        result['SF_detail'] = (f"尾部偏移{sf.tail_drift_pct:.2f}% "
+                                f"尾长{sf.tail_length}根")
         if sf.reasoning:
             result['SF_detail'] += f" [{sf.reasoning[0]}]"
 
