@@ -4,8 +4,8 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import FileResponse
 
-from server.database import get_db
-from server.models import StockListItem, StockDetail
+from web.database import get_db
+from web.models import StockListItem, StockDetail
 
 router = APIRouter(prefix="/api/stocks", tags=["stocks"])
 

@@ -6,12 +6,11 @@ import csv
 import time
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from src.data.fetcher import fetch_kline_smart, get_stock_name, detect_market
-from src.analyzer.scorer import run_full_analysis
-from src.analyzer.base import AnalyzerConfig
-from src.report.charger import generate_chart
+from core import fetch_kline, detect_market, get_stock_name, run_full_analysis, AnalyzerConfig
+from core.report.chart import _build_chart
+import matplotlib.pyplot as plt
 
 
 def main():
@@ -32,7 +31,7 @@ def main():
             time.sleep(2)
 
         try:
-            df = fetch_kline_smart(symbol=symbol, end_date=end_date, bars=300)
+            df = fetch_kline(symbol=symbol, end_date=end_date, bars=300)
         except Exception as e:
             print(f"数据获取失败: {e}")
             continue
@@ -42,7 +41,7 @@ def main():
             continue
 
         config = AnalyzerConfig()
-        card = run_full_analysis(df, symbol=symbol, config=config)
+        card = run_full_analysis(df, symbol=symbol, config=config, market=detect_market(symbol))
         card.symbol_name = get_stock_name(symbol)
         card.market = detect_market(symbol)
 
@@ -54,9 +53,6 @@ def main():
         filepath = str(out_path / filename)
 
         # 直接调用内部构建函数并保存
-        from src.report.charger import _build_chart
-        import matplotlib.pyplot as plt
-
         fig = _build_chart(df, card)
         fig.savefig(filepath, dpi=150, bbox_inches='tight', facecolor='white')
         plt.close(fig)

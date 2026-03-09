@@ -12,8 +12,8 @@ TY 统一区间检测
 import numpy as np
 import pandas as pd
 
-from src.analyzer.base import AnalyzerConfig, SqueezeResult, GradeScore, StructureResult
-from src.utils.helpers import calc_atr, linear_regression_slope, normalize_slope
+from core.types import AnalyzerConfig, SqueezeResult, GradeScore, StructureResult
+from core.utils.helpers import calc_atr, linear_regression_slope, normalize_slope
 
 
 def analyze_squeeze(df: pd.DataFrame,

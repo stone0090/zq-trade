@@ -19,7 +19,7 @@ import mplfinance as mpf
 import pandas as pd
 import numpy as np
 
-from src.analyzer.base import (
+from core.types import (
     ScoreCard, GradeScore, ReleaseLevel
 )
 

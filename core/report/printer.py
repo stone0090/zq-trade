@@ -5,7 +5,7 @@
 """
 import sys
 
-from src.analyzer.base import (
+from core.types import (
     ScoreCard, GradeScore, ReleaseLevel
 )
 

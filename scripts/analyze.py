@@ -14,7 +14,7 @@ import argparse
 from pathlib import Path
 
 # 将项目根目录加入 sys.path
-sys.path.insert(0, str(Path(__file__).parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 
 def main():
@@ -42,41 +42,24 @@ def main():
 
 def cmd_analyze(args):
     """执行六维打分分析"""
-    from src.data.fetcher import fetch_kline_smart, get_stock_name, detect_market
-    from src.analyzer.scorer import run_full_analysis
-    from src.analyzer.base import AnalyzerConfig
-    from src.report.printer import print_score_card
+    from core import analyze
+    from core.report.printer import print_score_card
 
-    # 1. 获取数据
+    # 1. 一站式分析
     try:
-        df = fetch_kline_smart(
-            symbol=args.symbol,
-            end_date=args.end,
-            bars=args.bars
-        )
+        card = analyze(args.symbol, end_date=args.end, bars=args.bars)
     except Exception as e:
-        print(f"数据获取失败: {e}")
+        print(f"分析失败: {e}")
         sys.exit(1)
 
-    if df.empty:
-        print("获取到的数据为空，请检查股票代码和日期范围")
-        sys.exit(1)
-
-    # 2. 获取股票名称
-    stock_name = get_stock_name(args.symbol)
-
-    # 3. 运行分析
-    config = AnalyzerConfig()
-    card = run_full_analysis(df, symbol=args.symbol, config=config)
-    card.symbol_name = stock_name
-    card.market = detect_market(args.symbol)
-
-    # 4. 输出报告
+    # 2. 输出报告
     print_score_card(card)
 
-    # 5. 生成图表（可选）
+    # 3. 生成图表（可选）
     if args.chart:
-        from src.report.charger import generate_chart
+        from core.report.chart import generate_chart
+        from core import fetch_kline
+        df = fetch_kline(symbol=args.symbol, end_date=args.end, bars=args.bars)
         path = generate_chart(df, card)
         print(f"\n图表已保存: {path}")
 

@@ -4,10 +4,10 @@ import threading
 from datetime import datetime
 from fastapi import APIRouter, HTTPException
 
-from server.database import get_db
-from server.models import BatchCreate, BatchResponse, BatchProgress
-from server.config import DB_PATH, CHARTS_DIR
-from server.services.analysis import analyze_batch_sync
+from web.database import get_db
+from web.models import BatchCreate, BatchResponse, BatchProgress
+from web.config import DB_PATH, CHARTS_DIR
+from web.services.analysis import analyze_batch_sync
 
 router = APIRouter(prefix="/api/batches", tags=["batches"])
 

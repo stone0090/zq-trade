@@ -8,11 +8,11 @@ DN 动能分析
 import numpy as np
 import pandas as pd
 
-from src.analyzer.base import (
+from core.types import (
     AnalyzerConfig, MomentumResult, GradeScore,
     StructureResult, PlatformResult, SqueezeResult
 )
-from src.utils.helpers import candle_body_size
+from core.utils.helpers import candle_body_size
 
 
 def analyze_momentum(df: pd.DataFrame,

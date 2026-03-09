@@ -11,8 +11,8 @@ _root = Path(__file__).resolve().parent.parent
 if str(_root) not in sys.path:
     sys.path.insert(0, str(_root))
 
-from server.database import init_db, get_db
-from server.routes import batches, stocks, labels
+from web.database import init_db, get_db
+from web.routes import batches, stocks, labels
 
 app = FastAPI(title="ZQ-Trade 六维分析标注系统")
 

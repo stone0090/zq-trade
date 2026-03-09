@@ -4,15 +4,15 @@ import os
 from pathlib import Path
 
 # 确保项目根目录在 sys.path
-root = Path(__file__).resolve().parent
+root = Path(__file__).resolve().parent.parent
 if str(root) not in sys.path:
     sys.path.insert(0, str(root))
 os.chdir(str(root))
 
 
 def main():
-    from server.database import init_db
-    from server.config import DB_PATH
+    from web.database import init_db
+    from web.config import DB_PATH
 
     # 初始化数据库
     print("初始化数据库...")
@@ -27,7 +27,7 @@ def main():
     port = 8000
     print(f"\n启动服务器: http://localhost:{port}")
     print("按 Ctrl+C 停止\n")
-    uvicorn.run("server.app:app", host="0.0.0.0", port=port, reload=False)
+    uvicorn.run("web.app:app", host="0.0.0.0", port=port, reload=False)
 
 
 def _import_labeled_cases():
@@ -35,8 +35,8 @@ def _import_labeled_cases():
     import csv
     import uuid
     from datetime import datetime
-    from server.database import get_db
-    from server.config import LABELED_CASES_CSV
+    from web.database import get_db
+    from web.config import LABELED_CASES_CSV
 
     if not LABELED_CASES_CSV.exists():
         return

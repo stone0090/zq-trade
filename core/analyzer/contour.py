@@ -7,8 +7,8 @@ LK 轮廓质量评估
 import numpy as np
 import pandas as pd
 
-from src.analyzer.base import AnalyzerConfig, ContourResult, GradeScore, StructureResult
-from src.utils.helpers import calc_atr
+from core.types import AnalyzerConfig, ContourResult, GradeScore, StructureResult
+from core.utils.helpers import calc_atr
 
 
 def analyze_contour(df: pd.DataFrame,

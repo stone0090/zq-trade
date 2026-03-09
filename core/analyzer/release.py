@@ -7,7 +7,7 @@ SF 释放级别评估
 import numpy as np
 import pandas as pd
 
-from src.analyzer.base import (
+from core.types import (
     AnalyzerConfig, ReleaseResult, ReleaseLevel,
     StructureResult
 )

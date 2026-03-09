@@ -7,11 +7,9 @@ import sys
 import csv
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from src.data.fetcher import fetch_kline_smart, detect_market
-from src.analyzer.scorer import run_full_analysis
-from src.analyzer.base import AnalyzerConfig, GradeScore, ReleaseLevel
+from core import fetch_kline, detect_market, run_full_analysis, AnalyzerConfig, GradeScore, ReleaseLevel
 
 
 def grade_str(score) -> str:
@@ -26,7 +24,7 @@ def grade_str(score) -> str:
 def run_one(symbol: str, end_date: str):
     """运行单个案例，返回各维度结果字典"""
     try:
-        df = fetch_kline_smart(symbol=symbol, end_date=end_date, bars=300)
+        df = fetch_kline(symbol=symbol, end_date=end_date, bars=300)
     except Exception as e:
         return {'error': str(e)}
 

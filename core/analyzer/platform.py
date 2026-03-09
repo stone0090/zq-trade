@@ -8,8 +8,8 @@ PT 平台位/颈线位检测
 import numpy as np
 import pandas as pd
 
-from src.analyzer.base import AnalyzerConfig, PlatformResult, GradeScore, StructureResult
-from src.utils.helpers import calc_atr, price_clustering, candle_body
+from core.types import AnalyzerConfig, PlatformResult, GradeScore, StructureResult
+from core.utils.helpers import calc_atr, price_clustering, candle_body
 
 
 def analyze_platform(df: pd.DataFrame,

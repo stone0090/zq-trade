@@ -1,7 +1,7 @@
 """SQLite 数据库管理"""
 import sqlite3
 from contextlib import contextmanager
-from server.config import DB_PATH
+from web.config import DB_PATH
 
 
 def get_connection() -> sqlite3.Connection:

@@ -6,12 +6,10 @@ import sys
 import time
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from src.data.fetcher import fetch_kline_smart, get_stock_name, detect_market
-from src.analyzer.scorer import run_full_analysis
-from src.analyzer.base import AnalyzerConfig
-from src.report.charger import _build_chart
+from core import fetch_kline, detect_market, get_stock_name, run_full_analysis, AnalyzerConfig
+from core.report.chart import _build_chart
 import matplotlib.pyplot as plt
 
 
@@ -47,7 +45,7 @@ def main():
 
         # 获取数据
         try:
-            df = fetch_kline_smart(symbol=symbol, end_date=None, bars=300)
+            df = fetch_kline(symbol=symbol, end_date=None, bars=300)
         except Exception as e:
             print(f"  数据获取失败: {e}\n")
             fail_count += 1
@@ -60,7 +58,7 @@ def main():
 
         # 分析
         config = AnalyzerConfig()
-        card = run_full_analysis(df, symbol=symbol, config=config)
+        card = run_full_analysis(df, symbol=symbol, config=config, market=market)
         card.symbol_name = get_stock_name(symbol)
         card.market = market
 

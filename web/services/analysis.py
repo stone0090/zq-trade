@@ -1,4 +1,4 @@
-"""分析服务层 - 封装 src/ 分析引擎"""
+"""分析服务层 - 封装 core/ 分析引擎"""
 import sys
 import json
 import threading
@@ -6,17 +6,16 @@ import time
 import uuid
 from pathlib import Path
 from datetime import datetime
-from dataclasses import asdict
 from enum import Enum
 
-# 确保 src/ 在路径中
+# 确保项目根目录在路径中
 _root = Path(__file__).resolve().parent.parent.parent
 if str(_root) not in sys.path:
     sys.path.insert(0, str(_root))
 
-from src.data.fetcher import fetch_kline_smart, get_stock_name, detect_market
-from src.analyzer.scorer import run_full_analysis
-from src.analyzer.base import AnalyzerConfig, GradeScore, ReleaseLevel
+from core import analyze as core_analyze, fetch_kline, detect_market, get_stock_name
+from core import run_full_analysis, AnalyzerConfig
+from core.serializer import scorecard_to_dict, extract_grades
 
 import matplotlib
 matplotlib.use('Agg')
@@ -24,98 +23,6 @@ import matplotlib.pyplot as plt
 
 # matplotlib 非线程安全，加锁保护
 _chart_lock = threading.Lock()
-
-
-def _serialize(obj):
-    """递归序列化 dataclass / enum / datetime / numpy"""
-    if obj is None:
-        return None
-    if isinstance(obj, Enum):
-        return obj.name if isinstance(obj, GradeScore) else str(obj)
-    if isinstance(obj, datetime):
-        return obj.isoformat()
-    if isinstance(obj, (bool,)):
-        return obj
-    # numpy 类型处理
-    try:
-        import numpy as np
-        if isinstance(obj, (np.integer,)):
-            return int(obj)
-        if isinstance(obj, (np.floating,)):
-            return float(obj)
-        if isinstance(obj, np.bool_):
-            return bool(obj)
-        if isinstance(obj, np.ndarray):
-            return obj.tolist()
-    except ImportError:
-        pass
-    if isinstance(obj, (list, tuple)):
-        return [_serialize(v) for v in obj]
-    if isinstance(obj, dict):
-        return {k: _serialize(v) for k, v in obj.items()}
-    if hasattr(obj, '__dataclass_fields__'):
-        return {k: _serialize(v) for k, v in asdict(obj).items()}
-    return obj
-
-
-def scorecard_to_dict(card) -> dict:
-    """将 ScoreCard 转为可 JSON 序列化的 dict"""
-    d = {}
-    for field_name in card.__dataclass_fields__:
-        val = getattr(card, field_name)
-        d[field_name] = _serialize(val)
-    return d
-
-
-def extract_grades(card_dict: dict) -> dict:
-    """从 ScoreCard dict 提取各维度 grade 字符串"""
-    grades = {}
-
-    dl = card_dict.get('dl_result')
-    if dl:
-        score = dl.get('score')
-        grades['dl_grade'] = score if score else None
-    else:
-        grades['dl_grade'] = None
-
-    pt = card_dict.get('pt_result')
-    if pt:
-        grades['pt_grade'] = pt.get('score')
-    else:
-        grades['pt_grade'] = None
-
-    lk = card_dict.get('lk_result')
-    if lk:
-        grades['lk_grade'] = lk.get('score')
-    else:
-        grades['lk_grade'] = None
-
-    sf = card_dict.get('sf_result')
-    if sf:
-        score_val = sf.get('score')
-        grades['sf_grade'] = str(score_val) if score_val else None
-    else:
-        grades['sf_grade'] = None
-
-    ty = card_dict.get('ty_result')
-    if ty:
-        if ty.get('pending'):
-            grades['ty_grade'] = '待定'
-        else:
-            grades['ty_grade'] = ty.get('score')
-    else:
-        grades['ty_grade'] = None
-
-    dn = card_dict.get('dn_result')
-    if dn:
-        if dn.get('pending'):
-            grades['dn_grade'] = '待定'
-        else:
-            grades['dn_grade'] = dn.get('score')
-    else:
-        grades['dn_grade'] = None
-
-    return grades
 
 
 def analyze_stock(symbol: str, end_date: str = None, chart_dir: str = None) -> dict:
@@ -135,19 +42,19 @@ def analyze_stock(symbol: str, end_date: str = None, chart_dir: str = None) -> d
     """
     market = detect_market(symbol)
 
-    df = fetch_kline_smart(symbol=symbol, end_date=end_date, bars=300)
+    df = fetch_kline(symbol=symbol, end_date=end_date, bars=300)
     if df is None or df.empty:
         raise ValueError(f"未能获取到 {symbol} 的有效数据")
 
     config = AnalyzerConfig()
-    card = run_full_analysis(df, symbol=symbol, config=config)
+    card = run_full_analysis(df, symbol=symbol, config=config, market=market)
     card.symbol_name = get_stock_name(symbol)
     card.market = market
 
     # 生成图表
     chart_path = None
     if chart_dir:
-        from src.report.charger import _build_chart
+        from core.report.chart import _build_chart
         chart_dir_path = Path(chart_dir)
         chart_dir_path.mkdir(parents=True, exist_ok=True)
         filepath = str(chart_dir_path / f"{symbol}.png")
@@ -164,7 +71,6 @@ def analyze_stock(symbol: str, end_date: str = None, chart_dir: str = None) -> d
 
     conclusion = ''
     if card.conclusion_lines:
-        # 第一行是极简结论
         conclusion = card.conclusion_lines[0] if card.conclusion_lines else ''
 
     return {

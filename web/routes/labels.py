@@ -4,9 +4,9 @@ from datetime import datetime
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import PlainTextResponse
 
-from server.database import get_db
-from server.models import LabelUpsert
-from server.services.export import export_batch_csv
+from web.database import get_db
+from web.models import LabelUpsert
+from web.services.export import export_batch_csv
 
 router = APIRouter(prefix="/api", tags=["labels"])
 

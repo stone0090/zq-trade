@@ -8,16 +8,16 @@
 import pandas as pd
 from datetime import datetime
 
-from src.analyzer.base import (
+from core.types import (
     AnalyzerConfig, ScoreCard, GradeScore, ReleaseLevel
 )
-from src.analyzer.structure import analyze_structure
-from src.analyzer.platform import analyze_platform, activate_platform
-from src.analyzer.contour import analyze_contour
-from src.analyzer.squeeze import analyze_squeeze
-from src.analyzer.momentum import analyze_momentum
-from src.analyzer.release import analyze_release
-from src.utils.helpers import clean_ohlcv
+from core.analyzer.structure import analyze_structure
+from core.analyzer.platform import analyze_platform, activate_platform
+from core.analyzer.contour import analyze_contour
+from core.analyzer.squeeze import analyze_squeeze
+from core.analyzer.momentum import analyze_momentum
+from core.analyzer.release import analyze_release
+from core.utils.helpers import clean_ohlcv
 
 
 def run_full_analysis(df: pd.DataFrame,
