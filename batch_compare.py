@@ -26,7 +26,7 @@ def grade_str(score) -> str:
 def run_one(symbol: str, end_date: str):
     """运行单个案例，返回各维度结果字典"""
     try:
-        df = fetch_kline_smart(symbol=symbol, end_date=end_date, bars=400)
+        df = fetch_kline_smart(symbol=symbol, end_date=end_date, bars=300)
     except Exception as e:
         return {'error': str(e)}
 
@@ -99,7 +99,7 @@ def run_one(symbol: str, end_date: str):
         dn = card.dn_result
         if dn.pending:
             result['DN'] = 'C'
-            result['DN_detail'] = '等待触发'
+            result['DN_detail'] = '待定'
         else:
             result['DN'] = grade_str(dn.score)
             result['DN_detail'] = (f"方向={dn.direction} 力度={dn.force_ratio:.1f}x "

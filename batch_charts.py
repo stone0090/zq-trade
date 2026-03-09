@@ -20,7 +20,7 @@ def main():
         reader = csv.DictReader(f)
         cases = list(reader)
 
-    output_dir = "charts/batch"
+    output_dir = "charts"
     print(f"共 {len(cases)} 个案例，图表输出到 {output_dir}/\n")
 
     for i, case in enumerate(cases):
@@ -32,7 +32,7 @@ def main():
             time.sleep(2)
 
         try:
-            df = fetch_kline_smart(symbol=symbol, end_date=end_date, bars=400)
+            df = fetch_kline_smart(symbol=symbol, end_date=end_date, bars=300)
         except Exception as e:
             print(f"数据获取失败: {e}")
             continue

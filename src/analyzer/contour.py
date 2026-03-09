@@ -74,6 +74,7 @@ def analyze_contour(df: pd.DataFrame,
 
     result.abnormal_count = abnormal_count
     result.abnormal_ratio = round(abnormal_ratio, 4)
+    result.abnormal_indices = list(np.where(abnormal_mask)[0])  # 结构区间内的相对索引
 
     # ─── 4. 波浪规则性评估 ───
     # 用收盘价的局部极值点间距的规则性来衡量波浪是否有节奏

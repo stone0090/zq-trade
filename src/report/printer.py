@@ -194,10 +194,13 @@ def print_score_card(card: ScoreCard):
     if card.ty_result:
         ty = card.ty_result
         print()
-        print(f"  TY 统一区间  {_bar(ty.score)}  {_format_score_tag(ty.score)}")
-        print(f"    连续缩量: {ty.squeeze_length}根  |  "
-              f"均幅/ATR: {ty.avg_range_ratio:.1%}  |  "
-              f"斜率: {ty.slope_pct:.4f}%")
+        if ty.pending:
+            print(f"  TY 统一区间  {_bar(GradeScore.C)}  {_c('[ 待定 ]', 'yellow')}")
+        else:
+            print(f"  TY 统一区间  {_bar(ty.score)}  {_format_score_tag(ty.score)}")
+            print(f"    连续缩量: {ty.squeeze_length}根  |  "
+                  f"均幅/ATR: {ty.avg_range_ratio:.1%}  |  "
+                  f"斜率: {ty.slope_pct:.4f}%")
         for r in ty.reasoning:
             _print_reasoning(r)
 
@@ -206,7 +209,7 @@ def print_score_card(card: ScoreCard):
         dn = card.dn_result
         print()
         if dn.pending:
-            print(f"  DN 动能      {_bar(GradeScore.C)}  {_c('[ 等待触发 ]', 'yellow')}")
+            print(f"  DN 动能      {_bar(GradeScore.C)}  {_c('[ 待定 ]', 'yellow')}")
             for r in dn.reasoning:
                 _print_reasoning(r)
         else:

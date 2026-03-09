@@ -236,6 +236,11 @@ def _find_best_candidate(struct_df, candidates, pt_type, tolerance,
                 struct_df, center_price, pen_tolerance, pt_type
             )
 
+        # 首次接近PT时的过冲检测
+        first_overshoot_atr = _detect_first_approach_overshoot(
+            struct_df, center_price, tolerance, base_atr, pt_type
+        )
+
         total_pens = shadow_pens + body_pens
         # 候选评分: 测试次数优先，穿越是瑕疵
         # 达到最低触碰数的候选大幅加分，确保优先于未达标候选
@@ -271,6 +276,7 @@ def _find_best_candidate(struct_df, candidates, pt_type, tolerance,
                 'post_pen_tests': post_pen_tests,
                 'pen_events': pen_events,
                 'avg_interval': avg_interval,
+                'first_overshoot_atr': first_overshoot_atr,
                 'freq': freq,
                 'type': pt_type,
             }
@@ -285,8 +291,9 @@ def _grade_platform(candidate: dict, config: AnalyzerConfig) -> tuple:
     """
     根据测试次数、穿越类型、间隔分布评分。
 
-    S: ≥3次测试，实体未穿越 + 测试间隔充分
-    A: ≥3次测试，实体未穿越但间隔偏短；或实体穿越后有≥2次测试恢复
+    S: ≥3次测试，实体未穿越 + 测试事件无过高点 + 测试间隔充分
+    A: ≥3次测试，实体未穿越但有测试过高点或间隔偏短；
+       或实体穿越后有≥2次测试恢复
     B: 多次穿越但仍有测试；或间隔不够
     C: 不足3次测试；或实体穿越后恢复不足
 
@@ -298,6 +305,7 @@ def _grade_platform(candidate: dict, config: AnalyzerConfig) -> tuple:
     body_pens = candidate['body_pens']
     post_pen_tests = candidate['post_pen_tests']
     avg_interval = candidate['avg_interval']
+    first_overshoot = candidate.get('first_overshoot_atr', 0.0)
     min_required = config.pt_min_touch_count  # 3
     ideal_interval = config.pt_min_touch_interval  # 20
 
@@ -307,11 +315,17 @@ def _grade_platform(candidate: dict, config: AnalyzerConfig) -> tuple:
 
     # ≥3次测试 + 实体未穿越
     if body_pens == 0:
-        # 间隔充分 → S（影线穿越不影响平台有效性）
+        # 测试事件有过高点(≥0.25 ATR) → A
+        if first_overshoot >= config.pt_first_overshoot_threshold:
+            detail = f"测试过高点{first_overshoot:.2f}ATR"
+            if shadow_pens > 0:
+                detail += f"，影线穿越{shadow_pens}次"
+            return GradeScore.A, detail
+        # 间隔充分 + 无过高点 → S
         if avg_interval >= ideal_interval:
             detail = f"影线穿越{shadow_pens}次（不影响评级）" if shadow_pens > 0 else ""
             return GradeScore.S, detail
-        # 间隔偏短 → A（影线穿越 + 间隔密 = 有轻微隐患）
+        # 间隔偏短 → A
         detail = f"间隔{avg_interval:.0f}根偏短"
         if shadow_pens > 0:
             detail += f"，影线穿越{shadow_pens}次"
@@ -378,6 +392,9 @@ def _count_penetrations_detailed(struct_df: pd.DataFrame, price: float,
     影线穿越: 影线超过平台位但实体没有穿过
     实体穿越: 实体完全穿过平台位（连续穿透段只计一次事件）
 
+    注意：结构起始处价格自然高于/低于PT的K线不算穿越。
+    只有价格先回到PT附近，再次突破PT，才算真正的穿越。
+
     Returns:
         (shadow_pen_count, body_pen_count, pen_event_indices)
     """
@@ -385,6 +402,7 @@ def _count_penetrations_detailed(struct_df: pd.DataFrame, price: float,
     body_count = 0
     pen_events = []
     was_body_pen = False
+    seen_near_pt = False  # 价格是否曾到过PT附近
 
     for i in range(len(struct_df)):
         row = struct_df.iloc[i]
@@ -401,10 +419,14 @@ def _count_penetrations_detailed(struct_df: pd.DataFrame, price: float,
             # 实体穿越: 实体完全在平台价上方
             body_pen = body_low > price + tolerance
 
-        if shadow_pen:
+        # 价格曾到过PT附近（非穿越状态），才开始计穿越
+        if not body_pen:
+            seen_near_pt = True
+
+        if shadow_pen and seen_near_pt:
             shadow_count += 1
 
-        if body_pen and not was_body_pen:
+        if body_pen and not was_body_pen and seen_near_pt:
             body_count += 1
             pen_events.append(i)
         was_body_pen = body_pen
@@ -416,10 +438,12 @@ def _count_post_penetration_tests(struct_df: pd.DataFrame, price: float,
                                   tolerance: float, pt_type: str) -> int:
     """
     统计最后一次实体穿越之后的有效测试次数。
+    与 _count_penetrations_detailed 保持一致：排除结构起始高位K线。
     """
-    # 找到最后一次实体穿越的位置
+    # 找到最后一次实体穿越的位置（排除结构起始处自然偏离）
     last_pen_idx = -1
     was_body_pen = False
+    seen_near_pt = False
     for i in range(len(struct_df)):
         row = struct_df.iloc[i]
         body_low, body_high = candle_body(row['Open'], row['Close'])
@@ -429,7 +453,10 @@ def _count_post_penetration_tests(struct_df: pd.DataFrame, price: float,
         else:
             body_pen = body_low > price + tolerance
 
-        if body_pen and not was_body_pen:
+        if not body_pen:
+            seen_near_pt = True
+
+        if body_pen and not was_body_pen and seen_near_pt:
             last_pen_idx = i
         was_body_pen = body_pen
 
@@ -458,3 +485,109 @@ def _calc_avg_interval(touches: list) -> float:
     for i in range(1, len(touches)):
         intervals.append(touches[i][0] - touches[i - 1][0])
     return sum(intervals) / len(intervals) if intervals else 0.0
+
+
+def _detect_first_approach_overshoot(struct_df: pd.DataFrame, price: float,
+                                     tolerance: float, base_atr: float,
+                                     pt_type: str) -> float:
+    """
+    检测价格首次从对侧接近PT时是否有显著过冲。
+
+    对于阻力位：找第一根收盘低于PT的K线(价格在PT下方)，
+    然后找从此位置起第一根High触及PT区域的K线，
+    再检查该K线及随后几根K线的最大High是否显著超过PT+tolerance。
+
+    对于支撑位：对称逻辑。
+
+    Returns:
+        过冲幅度(ATR为单位)，0表示无显著过冲
+    """
+    if base_atr <= 0 or len(struct_df) < 3:
+        return 0.0
+
+    # 首次接近后检查的窗口大小（包含首根）
+    approach_window = 3
+
+    if pt_type == 'resistance':
+        # 1. 找第一根Close < price的K线
+        first_below_idx = -1
+        for i in range(len(struct_df)):
+            if struct_df.iloc[i]['Close'] < price:
+                first_below_idx = i
+                break
+        if first_below_idx < 0:
+            return 0.0
+
+        # 2. 从first_below起，找第一根High触及PT区域的K线
+        for i in range(first_below_idx, len(struct_df)):
+            row = struct_df.iloc[i]
+            if row['High'] >= price - tolerance:
+                # 检查该K线及随后几根K线的最大过冲(相对PT+tolerance)
+                max_overshoot = 0.0
+                end_w = min(i + approach_window, len(struct_df))
+                for j in range(i, end_w):
+                    ov = struct_df.iloc[j]['High'] - (price + tolerance)
+                    if ov > max_overshoot:
+                        max_overshoot = ov
+                if max_overshoot > 0:
+                    return max_overshoot / base_atr
+                return 0.0
+    else:
+        # 支撑位：对称逻辑
+        first_above_idx = -1
+        for i in range(len(struct_df)):
+            if struct_df.iloc[i]['Close'] > price:
+                first_above_idx = i
+                break
+        if first_above_idx < 0:
+            return 0.0
+
+        for i in range(first_above_idx, len(struct_df)):
+            row = struct_df.iloc[i]
+            if row['Low'] <= price + tolerance:
+                max_overshoot = 0.0
+                end_w = min(i + approach_window, len(struct_df))
+                for j in range(i, end_w):
+                    ov = (price - tolerance) - struct_df.iloc[j]['Low']
+                    if ov > max_overshoot:
+                        max_overshoot = ov
+                if max_overshoot > 0:
+                    return max_overshoot / base_atr
+                return 0.0
+
+    return 0.0
+
+
+def _detect_touch_overshoots(struct_df: pd.DataFrame, touches: list,
+                             price: float, base_atr: float,
+                             pt_type: str) -> float:
+    """
+    检测每个测试事件附近是否有过高点（影线显著超过PT价格）。
+
+    对每个touch前后各看3根K线，找到最大过冲。
+    过冲从PT价格计算（非PT+tolerance），更符合人工判断逻辑。
+
+    Returns:
+        最大过冲幅度(ATR为单位)，0表示无过冲
+    """
+    if base_atr <= 0 or not touches:
+        return 0.0
+
+    window = 3
+    max_overshoot_atr = 0.0
+
+    for touch_idx, _, _ in touches:
+        start = max(0, touch_idx - window)
+        end = min(len(struct_df), touch_idx + window + 1)
+        for j in range(start, end):
+            row = struct_df.iloc[j]
+            if pt_type == 'resistance':
+                overshoot = row['High'] - price
+            else:
+                overshoot = price - row['Low']
+            if overshoot > 0:
+                ov_atr = overshoot / base_atr
+                if ov_atr > max_overshoot_atr:
+                    max_overshoot_atr = ov_atr
+
+    return max_overshoot_atr

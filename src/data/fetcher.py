@@ -1,7 +1,7 @@
 """
 数据获取模块
 
-支持 A 股小时级 K 线数据的智能增量获取与本地缓存。
+支持 A股/港股/美股 小时级 K 线数据的智能增量获取与本地缓存。
 通过股票代码自动识别市场，按市场分目录缓存。
 """
 import os
@@ -14,15 +14,18 @@ from pathlib import Path
 
 _BARS_PER_DAY = {
     'cn': 4,    # A股：10:30, 11:30, 14:00, 15:00
-    'us': 7,    # 美股盘中：预留
+    'hk': 6,    # 港股：10:00~16:00 (午休12:00~13:00)
+    'us': 7,    # 美股：09:30~16:00
 }
 
 
 # ─── 市场识别 ───
 
 def detect_market(symbol: str) -> str:
-    """根据代码格式识别市场: 纯数字 → 'cn'，含字母 → 'us'"""
-    return 'cn' if symbol.isdigit() else 'us'
+    """根据代码格式识别市场: 6位数字→'cn', ≤5位数字→'hk', 含字母→'us'"""
+    if symbol.isdigit():
+        return 'cn' if len(symbol) >= 6 else 'hk'
+    return 'us'
 
 
 # ─── 缓存路径 ───
@@ -46,7 +49,7 @@ def _cache_path(symbol: str) -> Path:
 
 def fetch_kline_smart(symbol: str,
                       end_date: str = None,
-                      bars: int = 400) -> pd.DataFrame:
+                      bars: int = 300) -> pd.DataFrame:
     """
     智能增量获取小时K线数据。
 
@@ -58,7 +61,7 @@ def fetch_kline_smart(symbol: str,
     Args:
         symbol: 股票代码（纯数字=A股，含字母=美股）
         end_date: 截止日期 'YYYY-MM-DD'，默认今天
-        bars: 目标K线根数，默认400
+        bars: 目标K线根数，默认300
 
     Returns:
         DataFrame(Open, High, Low, Close, Volume)，索引为 DatetimeIndex
@@ -73,6 +76,8 @@ def fetch_kline_smart(symbol: str,
     # 设置到当天收盘时间
     if market == 'cn':
         end_dt = end_dt.replace(hour=15, minute=0, second=0, microsecond=0)
+    elif market == 'hk':
+        end_dt = end_dt.replace(hour=16, minute=0, second=0, microsecond=0)
     else:
         end_dt = end_dt.replace(hour=16, minute=0, second=0, microsecond=0)
 
@@ -83,6 +88,50 @@ def fetch_kline_smart(symbol: str,
     start_dt = end_dt - timedelta(days=calendar_days)
 
     cache_file = _cache_path(symbol)
+
+    # ─── 港股/美股：直接通过 Yahoo Finance 获取 ───
+    if market in ('hk', 'us'):
+        local_df = None
+        if cache_file.exists():
+            try:
+                local_df = load_from_csv(str(cache_file))
+                if local_df.empty:
+                    local_df = None
+            except Exception:
+                local_df = None
+
+        if local_df is not None:
+            local_end = local_df.index[-1]
+            # 本地数据已覆盖截止日期，直接截取
+            if local_end >= end_dt:
+                result = local_df[local_df.index <= end_dt].tail(bars)
+                print(f"使用本地缓存: {cache_file} ({len(local_df)}根)")
+                print(f"  截取 {len(result)} 根 (截至 {end_dt.strftime('%Y-%m-%d')})")
+                return result
+
+        # 拉取数据
+        yahoo_sym = _to_yahoo_symbol(symbol, market)
+        print(f"通过 Yahoo Finance 获取 {yahoo_sym} ...")
+        merged = _fetch_yahoo(yahoo_sym, period='6mo')
+        if merged is None or merged.empty:
+            if local_df is not None and not local_df.empty:
+                print("  Yahoo 获取失败，使用本地缓存")
+                merged = local_df
+            else:
+                raise ValueError(f"未能获取到 {symbol} 的有效数据")
+        else:
+            if local_df is not None and not local_df.empty:
+                merged = pd.concat([local_df, merged])
+                merged = merged[~merged.index.duplicated(keep='last')].sort_index()
+
+        save_to_csv(merged, str(cache_file))
+        result = merged[merged.index <= end_dt].tail(bars)
+        print(f"数据就绪: {len(result)} 根小时K线")
+        if len(result) > 0:
+            print(f"  范围: {result.index[0]} ~ {result.index[-1]}")
+        return result
+
+    # ─── A股：原有逻辑 ───
 
     # ─── 读取本地缓存 ───
     local_df = None
@@ -292,7 +341,56 @@ def _standardize_columns(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-# ─── CSV 读写 ───
+# ─── Yahoo Finance 数据拉取（港股/美股）───
+
+def _to_yahoo_symbol(symbol: str, market: str) -> str:
+    """将内部代码转为 Yahoo Finance 代码"""
+    if market == 'hk':
+        return f"{int(symbol)}.HK"
+    return symbol
+
+
+def _fetch_yahoo(yahoo_symbol: str, period: str = '6mo') -> pd.DataFrame:
+    """通过 Yahoo Finance v8 API 获取小时K线"""
+    import requests
+    import json
+
+    url = f'https://query1.finance.yahoo.com/v8/finance/chart/{yahoo_symbol}'
+    params = {
+        'range': period,
+        'interval': '1h',
+        'includePrePost': 'false'
+    }
+    headers = {'User-Agent': 'Mozilla/5.0'}
+
+    resp = requests.get(url, params=params, headers=headers, timeout=20)
+    resp.raise_for_status()
+    data = resp.json()
+
+    result = data.get('chart', {}).get('result')
+    if not result:
+        raise ValueError(f"Yahoo Finance 未返回 {yahoo_symbol} 数据")
+
+    chart = result[0]
+    timestamps = chart['timestamp']
+    ohlc = chart['indicators']['quote'][0]
+
+    df = pd.DataFrame({
+        'Open': ohlc['open'],
+        'High': ohlc['high'],
+        'Low': ohlc['low'],
+        'Close': ohlc['close'],
+        'Volume': ohlc['volume'],
+    }, index=pd.to_datetime(timestamps, unit='s'))
+
+    df.index.name = 'datetime'
+    for col in ['Open', 'High', 'Low', 'Close', 'Volume']:
+        df[col] = pd.to_numeric(df[col], errors='coerce')
+    df.dropna(subset=['Open', 'High', 'Low', 'Close'], how='all', inplace=True)
+    df.sort_index(inplace=True)
+
+    print(f"  Yahoo Finance 获取 {len(df)} 根")
+    return df
 
 def load_from_csv(filepath: str) -> pd.DataFrame:
     """从 CSV 文件加载标准 OHLCV 数据"""
@@ -317,11 +415,16 @@ def save_to_csv(df: pd.DataFrame, filepath: str):
 # ─── 股票名称 ───
 
 def get_stock_name(symbol: str) -> str:
-    """
-    获取股票名称。
+    """获取股票名称。A股用Sina，港股/美股用Yahoo Finance。"""
+    market = detect_market(symbol)
+    if market == 'cn':
+        return _get_cn_stock_name(symbol)
+    else:
+        return _get_yahoo_stock_name(symbol, market)
 
-    通过 Sina Finance 实时行情接口获取，失败时返回空字符串。
-    """
+
+def _get_cn_stock_name(symbol: str) -> str:
+    """通过 Sina Finance 获取A股名称"""
     try:
         import requests
         market = 'sh' if symbol.startswith('6') else 'sz'
@@ -330,11 +433,31 @@ def get_stock_name(symbol: str) -> str:
         resp = requests.get(url, headers=headers, timeout=5)
         resp.encoding = 'gbk'
         text = resp.text
-        # 格式: var hq_str_sh600802="福建水泥,6.55,...";
         if '="' in text:
             content = text.split('="')[1]
             name = content.split(',')[0]
             if name:
+                return name
+    except Exception:
+        pass
+    return ""
+
+
+def _get_yahoo_stock_name(symbol: str, market: str) -> str:
+    """通过 Yahoo Finance 获取港股/美股名称"""
+    try:
+        import requests
+        yahoo_sym = _to_yahoo_symbol(symbol, market)
+        url = f'https://query1.finance.yahoo.com/v8/finance/chart/{yahoo_sym}'
+        params = {'range': '1d', 'interval': '1d'}
+        headers = {'User-Agent': 'Mozilla/5.0'}
+        resp = requests.get(url, params=params, headers=headers, timeout=10)
+        if resp.status_code == 200:
+            data = resp.json()
+            result = data.get('chart', {}).get('result')
+            if result:
+                meta = result[0].get('meta', {})
+                name = meta.get('longName') or meta.get('shortName') or ''
                 return name
     except Exception:
         pass

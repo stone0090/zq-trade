@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{% block title %}ZQ-Trade{% endblock %}</title>
+  <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif; background: #f3f4f6; }
+    .tag { display: inline-block; padding: 2px 10px; border-radius: 9999px; font-size: 13px; font-weight: 600; min-width: 32px; text-align: center; }
+    .tag-S { background: #d1fae5; color: #065f46; }
+    .tag-A { background: #e0f2fe; color: #075985; }
+    .tag-B { background: #fef3c7; color: #92400e; }
+    .tag-C { background: #fee2e2; color: #991b1b; }
+    .tag-1st { background: #d1fae5; color: #065f46; }
+    .tag-2nd { background: #fef3c7; color: #92400e; }
+    .tag-3rd { background: #fee2e2; color: #991b1b; }
+    .tag-pending { background: #e5e7eb; color: #6b7280; }
+    .tag-none { background: #f3f4f6; color: #9ca3af; }
+    .market-cn { background: #fef3c7; color: #92400e; }
+    .market-hk { background: #e0f2fe; color: #075985; }
+    .market-us { background: #ede9fe; color: #5b21b6; }
+    .btn { padding: 8px 20px; border-radius: 6px; font-size: 14px; font-weight: 500; cursor: pointer; border: none; transition: all 0.15s; }
+    .btn-primary { background: #3b82f6; color: white; }
+    .btn-primary:hover { background: #2563eb; }
+    .btn-success { background: #10b981; color: white; }
+    .btn-success:hover { background: #059669; }
+    .btn-danger { background: #ef4444; color: white; }
+    .btn-danger:hover { background: #dc2626; }
+    .btn-ghost { background: #f3f4f6; color: #374151; border: 1px solid #d1d5db; }
+    .btn-ghost:hover { background: #e5e7eb; }
+    .btn-sm { padding: 4px 12px; font-size: 12px; }
+    select, input[type="text"], textarea { border: 1px solid #d1d5db; border-radius: 6px; padding: 6px 10px; font-size: 14px; }
+    select:focus, input:focus, textarea:focus { outline: none; border-color: #3b82f6; box-shadow: 0 0 0 2px rgba(59,130,246,.2); }
+    .toast { position: fixed; top: 20px; right: 20px; padding: 12px 24px; border-radius: 8px; color: white; font-size: 14px; z-index: 1000; transition: opacity 0.3s; }
+    .toast-success { background: #10b981; }
+    .toast-error { background: #ef4444; }
+  </style>
+  {% block head %}{% endblock %}
+</head>
+<body>
+  <nav class="bg-white shadow-sm border-b mb-6">
+    <div class="max-w-7xl mx-auto px-6 py-3 flex items-center justify-between">
+      <a href="/" class="text-lg font-bold text-gray-800">ZQ-Trade</a>
+      <span class="text-sm text-gray-400">六维分析标注系统</span>
+    </div>
+  </nav>
+  <div class="max-w-7xl mx-auto px-6 pb-12">
+    {% block content %}{% endblock %}
+  </div>
+  <div id="toast-container"></div>
+  <script>
+    function showToast(msg, type='success') {
+      const c = document.getElementById('toast-container');
+      const t = document.createElement('div');
+      t.className = 'toast toast-' + type;
+      t.textContent = msg;
+      c.appendChild(t);
+      setTimeout(() => { t.style.opacity = '0'; setTimeout(() => t.remove(), 300); }, 2000);
+    }
+    async function api(url, opts={}) {
+      const resp = await fetch(url, { headers: {'Content-Type': 'application/json'}, ...opts });
+      if (!resp.ok) {
+        const err = await resp.json().catch(() => ({detail: resp.statusText}));
+        throw new Error(err.detail || '请求失败');
+      }
+      const ct = resp.headers.get('content-type') || '';
+      if (ct.includes('json')) return resp.json();
+      return resp.text();
+    }
+    function gradeTagClass(grade) {
+      if (!grade) return 'tag tag-none';
+      if (grade === '待定') return 'tag tag-pending';
+      return 'tag tag-' + grade;
+    }
+    function gradeTag(grade) {
+      const cls = gradeTagClass(grade);
+      return '<span class="' + cls + '">' + (grade || '-') + '</span>';
+    }
+    function marketTag(market) {
+      const labels = {cn:'A股', hk:'港股', us:'美股'};
+      return '<span class="tag market-' + market + '">' + (labels[market]||market) + '</span>';
+    }
+  </script>
+  {% block scripts %}{% endblock %}
+</body>
+</html>

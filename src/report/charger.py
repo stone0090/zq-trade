@@ -52,7 +52,7 @@ matplotlib.rcParams['axes.unicode_minus'] = False
 
 _COLORS = {
     'dl': '#4A90D9',
-    'pt': '#E74C3C',
+    'pt': '#9B59B6',
     'ty': '#F39C12',
     'dn_bull': '#C0392B',
     'dn_bear': '#27AE60',
@@ -115,18 +115,23 @@ def generate_chart(df: pd.DataFrame, card: ScoreCard,
 def _build_chart(df: pd.DataFrame, card: ScoreCard) -> plt.Figure:
     """构建完整的六维分析图表"""
 
-    fig = plt.figure(figsize=(36, 10))
+    fig = plt.figure(figsize=(36, 13.3))
     gs = GridSpec(2, 1, height_ratios=[7, 1.5], hspace=0.05, figure=fig)
     fig.subplots_adjust(left=0.03, right=0.95, bottom=0.10)  # 压缩左边距，右侧留给PT标签
 
     ax_main = fig.add_subplot(gs[0])
     ax_vol = fig.add_subplot(gs[1], sharex=ax_main)
 
-    # K线样式: 红涨绿跌 (A股习惯)
+    # K线样式: A股红涨绿跌，港股/美股绿涨红跌
+    market = getattr(card, 'market', 'cn') or 'cn'
+    if market == 'cn':
+        up_color, down_color = '#E74C3C', '#27AE60'
+    else:
+        up_color, down_color = '#27AE60', '#E74C3C'
     mc = mpf.make_marketcolors(
-        up='#E74C3C', down='#27AE60',
+        up=up_color, down=down_color,
         edge='inherit', wick='inherit',
-        volume={'up': '#E74C3C', 'down': '#27AE60'}
+        volume={'up': up_color, 'down': down_color}
     )
     style = mpf.make_mpf_style(marketcolors=mc, gridstyle=':', y_on_right=True)
 
@@ -152,12 +157,12 @@ def _build_chart(df: pd.DataFrame, card: ScoreCard) -> plt.Figure:
 
     # 叠加标注: DL / PT / TY / DN
     if card.dl_result:
-        _draw_dl(ax_main, card.dl_result, df)
+        _draw_dl(ax_main, card.dl_result, df, lk=card.lk_result)
 
     if card.pt_result and not card.early_terminated:
         _draw_pt(ax_main, card.pt_result, card.dl_result, market=card.market)
 
-    if card.ty_result and card.dl_result:
+    if card.ty_result and card.dl_result and not card.ty_result.pending:
         _draw_ty(ax_main, card.ty_result, card.dl_result, df)
 
     if card.dn_result and card.dl_result:
@@ -174,7 +179,7 @@ def _build_chart(df: pd.DataFrame, card: ScoreCard) -> plt.Figure:
 
 # ─── DL 独立结构 ───
 
-def _draw_dl(ax, dl, df):
+def _draw_dl(ax, dl, df, lk=None):
     """绘制 DL 结构尺标: 在K线下方用水平括号标注结构区间范围"""
     if dl.kline_count == 0:
         return
@@ -200,17 +205,25 @@ def _draw_dl(ax, dl, df):
     ax.plot([end, end], [ruler_y, ruler_y + tick_h],
             color=color, linewidth=1.5, alpha=0.8, zorder=8)
 
-    # 中间标签
+    # 中间标签: DL + LK
     mid_x = (start + end) / 2
-    label = f"DL {dl.kline_count}K ({dl.score})"
-    ax.text(mid_x, ruler_y - y_range * 0.008, label,
+    label_dl = f"DL {dl.kline_count}K ({dl.score})"
+    ax.text(mid_x, ruler_y - y_range * 0.008, label_dl,
             fontproperties=_FONT, color=color,
             fontsize=8, ha='center', va='top', zorder=10)
+
+    # LK 标签紧跟 DL 右侧，用自己评分的颜色
+    if lk:
+        lk_color = _score_color(lk.score)
+        label_lk = f"  LK({lk.score})"
+        ax.text(end, ruler_y - y_range * 0.008, label_lk,
+                fontproperties=_FONT, color=lk_color,
+                fontsize=8, ha='left', va='top', zorder=10)
 
 
 # ─── PT 平台位 ───
 
-_COLORS_PT_RES = '#E74C3C'  # 阻力位红色
+_COLORS_PT_RES = '#9B59B6'  # 阻力位紫色
 _COLORS_PT_SUP = '#2980B9'  # 支撑位蓝色
 
 
@@ -342,10 +355,10 @@ def _draw_dn(ax, ax_vol, dn, dl, df):
     """
     绘制 DN 突破K线标注：
     - 非Pending时：在触发K线处画竖线 + 三角箭头标记方向
-    - Pending时：在结构末端标注 "DN?" 等待标记
+    - Pending时：在结构末端标注 "DN?" 待定标记
     """
     if dn.pending:
-        # Pending: 在结构末端标注等待
+        # Pending: 在结构末端标注待定
         end = dl.structure_end_idx
         y_low, y_high = ax.get_ylim()
         y_range = y_high - y_low
@@ -427,11 +440,23 @@ def _draw_dn(ax, ax_vol, dn, dl, df):
 # ─── 底部评分摘要 ───
 
 def _draw_summary(fig, card: ScoreCard):
-    """在图表底部边距绘制精简结论行"""
+    """在图表底部边距绘制结论行（极简+详细成对展示）"""
     if card.conclusion_lines:
-        n = min(len(card.conclusion_lines), 2)
+        n = len(card.conclusion_lines)
+        y_start = 0.07
         for i, line in enumerate(card.conclusion_lines[:n]):
-            y_pos = 0.06 - i * 0.025
+            is_simple = (i % 2 == 0)  # 奇数行=极简, 偶数行=详细
+            if is_simple:
+                pair_idx = i // 2
+                y_pos = y_start - pair_idx * 0.06
+                fontsize = 16
+                fontweight = 'bold'
+            else:
+                pair_idx = i // 2
+                y_pos = y_start - pair_idx * 0.06 - 0.025
+                fontsize = 12
+                fontweight = 'normal'
+
             if line.startswith("看多") or line.startswith("待定(多)"):
                 color = '#27AE60'
             elif line.startswith("看空") or line.startswith("待定(空)"):
@@ -441,11 +466,11 @@ def _draw_summary(fig, card: ScoreCard):
             else:
                 color = '#F39C12'
             fig.text(0.95, y_pos, line,
-                     fontproperties=_FONT, fontsize=9, color=color,
-                     va='center', ha='right')
+                     fontproperties=_FONT, fontsize=fontsize, color=color,
+                     va='center', ha='right', fontweight=fontweight)
     else:
         grade_color = '#27AE60' if card.overall_passed else '#E74C3C'
         grade_text = f"综合: {card.overall_grade}"
         fig.text(0.95, 0.05, grade_text,
-                 fontproperties=_FONT, fontsize=9, color=grade_color,
+                 fontproperties=_FONT, fontsize=16, color=grade_color,
                  va='center', ha='right', fontweight='bold')

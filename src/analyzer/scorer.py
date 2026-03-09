@@ -82,7 +82,7 @@ def run_full_analysis(df: pd.DataFrame,
     card.sf_result = sf
 
     # ─── 5. TY 统一区间 ───
-    ty = analyze_squeeze(df, dl, config)
+    ty = analyze_squeeze(df, dl, config, platform=pt)
     card.ty_result = ty
 
     # ─── 6. DN 动能 ───
@@ -280,7 +280,7 @@ def _determine_position(card: ScoreCard):
     根据六维结果确定仓位档位。
 
     规则:
-    - DN pending → 等待
+    - DN 待定 → 等待
     - SF=3rd → 不做（动能已消耗完）
     - 所有维度均≥A（SF=1st视为≥A） → 1R
     - TY≥A + DN≥S → 0.5R（即使PT/LK/SF不够好）
@@ -298,6 +298,10 @@ def _determine_position(card: ScoreCard):
     # DL未通过 → 等待观察
     if card.dl_result and not card.dl_result.passed:
         return "等待", f"DL未成熟({card.dl_result.kline_count}根)，继续观察"
+
+    # TY=pending → 等待
+    if card.ty_result and card.ty_result.pending:
+        return "等待", "TY尚未形成，挤压不足，继续观察"
 
     # 收集除DL外各维度不达A的原因（DL只有S/C，已在上面处理）
     shortfalls = []
@@ -320,8 +324,8 @@ def _determine_position(card: ScoreCard):
         shortfalls.append(f"SF={sf.score}" if sf else "SF=?")
 
     ty = card.ty_result
-    if not ty or ty.score.value < GradeScore.A.value:
-        shortfalls.append(f"TY={ty.score}" if ty else "TY=?")
+    if not ty or ty.pending or ty.score.value < GradeScore.A.value:
+        shortfalls.append(f"TY={'待定' if (ty and ty.pending) else (ty.score if ty else '?')}")
 
     dn = card.dn_result
     if not dn or dn.score.value < GradeScore.A.value:
@@ -378,7 +382,12 @@ def _build_conclusions(card: ScoreCard):
     sf_tag = _tag_sf_with_reason(sf) if sf else "--"
 
     ty = card.ty_result
-    ty_tag = _tag_with_reason(ty.score, _get_ty_reason(ty)) if ty else "?"
+    if ty and ty.pending:
+        ty_tag = "待定"
+    elif ty:
+        ty_tag = _tag_with_reason(ty.score, _get_ty_reason(ty))
+    else:
+        ty_tag = "?"
 
     dn = card.dn_result
     dn_pending = dn and dn.pending
@@ -420,8 +429,10 @@ def _build_conclusions(card: ScoreCard):
 
     if not directions:
         pt_tag = _tag_with_reason(pt.score, _get_pt_reason(pt, pt.score)) if pt else "?"
-        score_str = f"DL{dl_tag}/PT{pt_tag}/LK{lk_tag}/{sf_tag}/TY{ty_tag}/DN{dn_tag}"
+        score_str = f"DL{dl_tag} / PT{pt_tag} / LK{lk_tag} / {sf_tag} / TY{ty_tag} / DN{dn_tag}"
+        simple_str = f"DL{_strip_reason(dl_tag)} / PT{_strip_reason(pt_tag)} / LK{_strip_reason(lk_tag)} / {_strip_reason(sf_tag)} / TY{_strip_reason(ty_tag)} / DN{_strip_reason(dn_tag)}"
         dir_label = "待定"
+        card.conclusion_lines.append(f"{dir_label}：{simple_str}")
         card.conclusion_lines.append(f"{dir_label}：{score_str}")
         return
 
@@ -430,10 +441,10 @@ def _build_conclusions(card: ScoreCard):
         if dir_type == 'bearish_reject':
             pt_s = pt.support_score if pt and pt.support_price > 0 else GradeScore.C
             pt_tag = _tag_with_reason(pt_s, _get_pt_reason(pt, pt_s, 'support'))
-            score_str = f"DL{dl_tag}/PT{pt_tag}/LK{lk_tag}/{sf_tag}/TY{ty_tag}/DN{dn_tag}"
-            card.conclusion_lines.append(
-                f"看空：{score_str}  (A股不做空)"
-            )
+            score_str = f"DL{dl_tag} / PT{pt_tag} / LK{lk_tag} / {sf_tag} / TY{ty_tag} / DN{dn_tag}"
+            simple_str = f"DL{_strip_reason(dl_tag)} / PT{_strip_reason(pt_tag)} / LK{_strip_reason(lk_tag)} / {_strip_reason(sf_tag)} / TY{_strip_reason(ty_tag)} / DN{_strip_reason(dn_tag)}"
+            card.conclusion_lines.append(f"看空：{simple_str}  (A股不做空)")
+            card.conclusion_lines.append(f"看空：{score_str}  (A股不做空)")
             continue
 
         if dir_type == 'bullish':
@@ -445,9 +456,11 @@ def _build_conclusions(card: ScoreCard):
             pt_score = pt.support_score if pt and pt.support_price > 0 else GradeScore.C
             pt_tag = _tag_with_reason(pt_score, _get_pt_reason(pt, pt_score, 'support'))
 
-        score_str = f"DL{dl_tag}/PT{pt_tag}/LK{lk_tag}/{sf_tag}/TY{ty_tag}/DN{dn_tag}"
+        score_str = f"DL{dl_tag} / PT{pt_tag} / LK{lk_tag} / {sf_tag} / TY{ty_tag} / DN{dn_tag}"
+        simple_str = f"DL{_strip_reason(dl_tag)} / PT{_strip_reason(pt_tag)} / LK{_strip_reason(lk_tag)} / {_strip_reason(sf_tag)} / TY{_strip_reason(ty_tag)} / DN{_strip_reason(dn_tag)}"
 
         if is_main:
+            card.conclusion_lines.append(f"{dir_label}：{simple_str}")
             card.conclusion_lines.append(f"{dir_label}：{score_str}")
         else:
             if dir_type == 'bullish' and pt:
@@ -458,6 +471,7 @@ def _build_conclusions(card: ScoreCard):
                              f"~{pt.support_zone_high:.2f}")
             else:
                 zone_info = ""
+            card.conclusion_lines.append(f"备注：{simple_str}  {zone_info}")
             card.conclusion_lines.append(f"备注：{score_str}  {zone_info}")
 
 
@@ -469,6 +483,12 @@ def _tag_with_reason(score: GradeScore, reason: str) -> str:
     if score == GradeScore.S or not reason:
         return tag
     return f"{tag}({reason})"
+
+
+def _strip_reason(tag: str) -> str:
+    """去掉标签中括号内的原因，只保留等级。"""
+    idx = tag.find('(')
+    return tag[:idx] if idx >= 0 else tag
 
 
 def _tag_sf_with_reason(sf) -> str:
@@ -526,8 +546,6 @@ def _get_lk_reason(lk) -> str:
         parts.append("中间松散")
     if lk.symmetry_score < 0.3:
         parts.append("对称性差")
-    if lk.abnormal_ratio > 0.05:
-        parts.append(f"异常K线{lk.abnormal_count}根")
     if not parts:
         if lk.quality_score < 0.4:
             parts.append("形态杂乱")

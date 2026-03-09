@@ -39,11 +39,16 @@ env/
 # Data cache (fetched K-line data)
 data/cn/
 data/us/
+data/hk/
 *.db
 *.sqlite
 
 # Charts output
 charts/
+
+# Debug files
+debug/
+narrow_debug*.txt
 
 # Logs
 *.log

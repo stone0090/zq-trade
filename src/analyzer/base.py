@@ -136,6 +136,7 @@ class ContourResult:
     range_cv: float = 0.0
     abnormal_count: int = 0
     abnormal_ratio: float = 0.0
+    abnormal_indices: list = field(default_factory=list)  # 异常K线在结构区间内的索引
     width_pct: float = 0.0
     is_narrow: bool = False
     symmetry_score: float = 0.0       # 前后半段对称性 [0,1]
@@ -150,6 +151,7 @@ class SqueezeResult:
     """TY 统一区间检测结果"""
     score: GradeScore = GradeScore.C
     passed: bool = False
+    pending: bool = True  # TY尚未形成（≤2根小K线）
     squeeze_length: int = 0
     squeeze_start_idx: int = 0
     squeeze_end_idx: int = 0
@@ -236,6 +238,7 @@ class AnalyzerConfig:
     dl_concentration_threshold: float = 0.05  # 筹码集中度阈值(std/mean)（仅记录）
     dl_max_drift_pct: float = 5.0              # 端点漂移阈值(%)，超过则收窄结构
     dl_max_range_pct: float = 5.0              # 结构最大振幅(%)，超过则收窄结构
+    dl_bridge_max_gap: int = 25                # 桥接最大间隔（允许跨越的趋势段窗口数）
 
     # PT 平台位
     pt_bin_width_atr_ratio: float = 0.1    # 直方图bin宽度 = ATR * ratio
@@ -247,6 +250,7 @@ class AnalyzerConfig:
     pt_tail_energy_vol_mult: float = 2.0   # 放量判定倍数(vs 均量)
     pt_adjustment_min_bars: int = 8        # 第3次触碰前最小调整K线数
     pt_adjustment_distance_atr: float = 0.5  # 远离平台的最小距离(ATR倍数)
+    pt_first_overshoot_threshold: float = 0.25  # 首次接近过冲阈值(ATR倍数)，≥此值判定为"第1次测试过高点"
 
     # LK 轮廓
     lk_rolling_window: int = 10            # 上下轨滑动窗口
@@ -258,13 +262,14 @@ class AnalyzerConfig:
     lk_narrow_penalty: float = 0.10       # 窄结构评分惩罚
 
     # TY 统一区间
-    ty_squeeze_atr_ratio: float = 0.85     # 小K线判定(振幅 < ATR*ratio)
+    ty_squeeze_atr_ratio: float = 0.60     # 小K线判定(振幅 < ATR*ratio)
+    ty_slightly_large_ratio: float = 1.20  # 稍大K线上限(60%~120%间容忍1根,≈平均ATR)
     ty_scan_window: int = 30               # 从尾部扫描的K线数
     ty_max_interruptions: int = 1          # 允许夹杂的非小K线数
     ty_max_gap_to_trigger: int = 1         # 与触发K线最大间距
-    ty_slope_s_threshold: float = 0.01     # S级斜率阈值
-    ty_slope_a_threshold: float = 0.02     # A级斜率阈值
-    ty_slope_b_threshold: float = 0.03     # B级斜率阈值
+    ty_slope_s_threshold: float = 0.03     # S级斜率阈值(接近水平)
+    ty_slope_a_threshold: float = 0.10     # A级斜率阈值(斜率较平)
+    ty_slope_b_threshold: float = 0.30     # B级斜率阈值
 
     # DN 动能
     dn_force_ratio_s: float = 3.0          # S级力度比阈值

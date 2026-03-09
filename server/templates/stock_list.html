@@ -1,0 +1,129 @@
+{% extends "base.html" %}
+{% block title %}{{ batch.name }} - ZQ-Trade{% endblock %}
+
+{% block content %}
+<div class="flex items-center justify-between mb-6">
+  <div class="flex items-center gap-4">
+    <a href="/" class="text-gray-400 hover:text-gray-600">&larr; 返回</a>
+    <h1 class="text-2xl font-bold text-gray-800">{{ batch.name }}</h1>
+    <span id="label-progress" class="text-sm text-gray-500"></span>
+  </div>
+  <div class="flex items-center gap-3">
+    <select id="filter-label" onchange="applyFilter()" class="text-sm">
+      <option value="">全部</option>
+      <option value="unlabeled">未标注</option>
+      <option value="labeled">已标注</option>
+    </select>
+    <select id="filter-market" onchange="applyFilter()" class="text-sm">
+      <option value="">全部市场</option>
+      <option value="cn">A股</option>
+      <option value="hk">港股</option>
+      <option value="us">美股</option>
+    </select>
+    <a href="/api/export?batch_id={{ batch.id }}" class="btn btn-ghost btn-sm" download>导出CSV</a>
+  </div>
+</div>
+
+<div class="bg-white rounded-lg shadow-sm border overflow-x-auto">
+  <table class="w-full text-sm">
+    <thead class="bg-gray-50 border-b">
+      <tr>
+        <th class="px-4 py-3 text-left font-medium text-gray-500">代码</th>
+        <th class="px-4 py-3 text-left font-medium text-gray-500">名称</th>
+        <th class="px-3 py-3 text-center font-medium text-gray-500">市场</th>
+        <th class="px-3 py-3 text-center font-medium text-gray-500">DL</th>
+        <th class="px-3 py-3 text-center font-medium text-gray-500">PT</th>
+        <th class="px-3 py-3 text-center font-medium text-gray-500">LK</th>
+        <th class="px-3 py-3 text-center font-medium text-gray-500">SF</th>
+        <th class="px-3 py-3 text-center font-medium text-gray-500">TY</th>
+        <th class="px-3 py-3 text-center font-medium text-gray-500">DN</th>
+        <th class="px-3 py-3 text-center font-medium text-gray-500">仓位</th>
+        <th class="px-4 py-3 text-left font-medium text-gray-500">结论</th>
+        <th class="px-3 py-3 text-center font-medium text-gray-500">标注</th>
+        <th class="px-3 py-3 text-center font-medium text-gray-500">状态</th>
+      </tr>
+    </thead>
+    <tbody id="stock-tbody">
+      <tr><td colspan="13" class="text-center py-8 text-gray-400">加载中...</td></tr>
+    </tbody>
+  </table>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const BATCH_ID = '{{ batch.id }}';
+let allStocks = [];
+
+function positionTag(pos) {
+  if (!pos) return '<span class="tag tag-none">-</span>';
+  const m = {'1R':'tag-S','0.5R':'tag-B','等待':'tag-pending','不做':'tag-C'};
+  return '<span class="tag ' + (m[pos]||'tag-none') + '">' + pos + '</span>';
+}
+
+function statusBadge(s) {
+  const m = {pending:'⏳', analyzing:'🔄', completed:'', error:'❌'};
+  return m[s] || '';
+}
+
+function renderStocks(stocks) {
+  const tbody = document.getElementById('stock-tbody');
+  if (stocks.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="13" class="text-center py-8 text-gray-400">无匹配数据</td></tr>';
+    return;
+  }
+
+  tbody.innerHTML = stocks.map(s => {
+    const labelIcon = s.label_status === 'labeled' ? '✅' : '⬜';
+    const rowBg = s.status === 'error' ? ' bg-red-50' : '';
+    return '<tr class="border-b hover:bg-blue-50 cursor-pointer' + rowBg + '" onclick="goDetail(\'' + s.id + '\')">' +
+      '<td class="px-4 py-3 font-mono font-semibold">' + s.symbol + '</td>' +
+      '<td class="px-4 py-3 text-gray-600">' + (s.symbol_name || '') + '</td>' +
+      '<td class="px-3 py-3 text-center">' + marketTag(s.market) + '</td>' +
+      '<td class="px-3 py-3 text-center">' + gradeTag(s.dl_grade) + '</td>' +
+      '<td class="px-3 py-3 text-center">' + gradeTag(s.pt_grade) + '</td>' +
+      '<td class="px-3 py-3 text-center">' + gradeTag(s.lk_grade) + '</td>' +
+      '<td class="px-3 py-3 text-center">' + gradeTag(s.sf_grade) + '</td>' +
+      '<td class="px-3 py-3 text-center">' + gradeTag(s.ty_grade) + '</td>' +
+      '<td class="px-3 py-3 text-center">' + gradeTag(s.dn_grade) + '</td>' +
+      '<td class="px-3 py-3 text-center">' + positionTag(s.position_size) + '</td>' +
+      '<td class="px-4 py-3 text-xs text-gray-500 max-w-xs truncate">' + (s.conclusion || '') + '</td>' +
+      '<td class="px-3 py-3 text-center">' + labelIcon + '</td>' +
+      '<td class="px-3 py-3 text-center">' + statusBadge(s.status) + '</td>' +
+    '</tr>';
+  }).join('');
+
+  // 更新进度
+  const labeled = stocks.filter(s => s.label_status === 'labeled').length;
+  document.getElementById('label-progress').textContent = '已标注 ' + labeled + '/' + stocks.length;
+}
+
+function applyFilter() {
+  const fl = document.getElementById('filter-label').value;
+  const fm = document.getElementById('filter-market').value;
+  let filtered = allStocks;
+  if (fl) filtered = filtered.filter(s => s.label_status === fl);
+  if (fm) filtered = filtered.filter(s => s.market === fm);
+  renderStocks(filtered);
+}
+
+function goDetail(stockId) {
+  window.location.href = '/batches/' + BATCH_ID + '/stock/' + stockId;
+}
+
+async function loadStocks() {
+  try {
+    allStocks = await api('/api/stocks?batch_id=' + BATCH_ID);
+    renderStocks(allStocks);
+    // 如果有未完成的，轮询
+    if (allStocks.some(s => s.status === 'pending' || s.status === 'analyzing')) {
+      setTimeout(loadStocks, 3000);
+    }
+  } catch(e) {
+    document.getElementById('stock-tbody').innerHTML = '<tr><td colspan="13" class="text-center py-8 text-red-500">加载失败</td></tr>';
+  }
+}
+
+loadStocks();
+</script>
+{% endblock %}

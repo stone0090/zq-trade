@@ -231,6 +231,9 @@ def _narrow_if_drifting(df: pd.DataFrame, result: StructureResult,
     best_h = result.range_high
     best_l = result.range_low
 
+    # 记录首个满足range/drift但不足dl_min_klines的位置（兜底用）
+    first_valid_narrow = None
+
     for new_start in range(start + step, end - 30, step):
         seg = df.iloc[new_start: end + 1]
         highs = seg['High'].values
@@ -255,12 +258,30 @@ def _narrow_if_drifting(df: pd.DataFrame, result: StructureResult,
             best_l = l
 
         if pct <= config.dl_max_range_pct and d <= config.dl_max_drift_pct:
-            _apply_narrow(result, new_start, end, df, h, l, pct,
-                          narrow_reason, original_count)
-            return
+            if len(seg) >= config.dl_min_klines:
+                # 优先：满足range/drift且K线数充足
+                _apply_narrow(result, new_start, end, df, h, l, pct,
+                              narrow_reason, original_count)
+                return
+            elif first_valid_narrow is None:
+                # 记录首个满足range/drift的位置（备用）
+                first_valid_narrow = (new_start, h, l, pct)
 
-    # 无法满足两个阈值 → 退化为最佳收窄
-    # 要求振幅至少改善30%，且K线数仍≥dl_min_klines
+    # 无法满足range/drift + ≥dl_min_klines
+    # 尝试退化方案：振幅大幅改善（≥50%）的最佳≥dl_min_klines位置
+    if best_start != start and best_pct < original_pct * 0.5:
+        _apply_narrow(result, best_start, end, df, best_h, best_l, best_pct,
+                      narrow_reason, original_count, fallback=True)
+        return
+
+    # 兜底：使用首个满足range/drift的位置（即使K线数不足dl_min_klines）
+    if first_valid_narrow:
+        ns, fh, fl, fp = first_valid_narrow
+        _apply_narrow(result, ns, end, df, fh, fl, fp,
+                      narrow_reason, original_count)
+        return
+
+    # 原始退化：振幅改善≥30%的最佳≥dl_min_klines位置
     if best_start != start and best_pct < original_pct * 0.7:
         _apply_narrow(result, best_start, end, df, best_h, best_l, best_pct,
                       narrow_reason, original_count, fallback=True)
