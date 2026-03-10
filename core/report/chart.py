@@ -34,14 +34,14 @@ def _setup_font() -> FontProperties:
     ]
     for path in candidates:
         if os.path.exists(path):
-            return FontProperties(fname=path, size=9)
+            return FontProperties(fname=path, size=12)
     # fallback
-    return FontProperties(size=9)
+    return FontProperties(size=12)
 
 
 _FONT = _setup_font()
 _FONT_TITLE = _setup_font()
-_FONT_TITLE._size = 12
+_FONT_TITLE._size = 16
 
 # 全局 rcParams 兜底
 matplotlib.rcParams['font.sans-serif'] = ['Microsoft YaHei', 'SimHei', 'sans-serif']
@@ -210,7 +210,7 @@ def _draw_dl(ax, dl, df, lk=None):
     label_dl = f"DL {dl.kline_count}K ({dl.score})"
     ax.text(mid_x, ruler_y - y_range * 0.008, label_dl,
             fontproperties=_FONT, color=color,
-            fontsize=8, ha='center', va='top', zorder=10)
+            fontsize=10, ha='center', va='top', zorder=10)
 
     # LK 标签紧跟 DL 右侧，用自己评分的颜色
     if lk:
@@ -218,7 +218,7 @@ def _draw_dl(ax, dl, df, lk=None):
         label_lk = f"  LK({lk.score})"
         ax.text(end, ruler_y - y_range * 0.008, label_lk,
                 fontproperties=_FONT, color=lk_color,
-                fontsize=8, ha='left', va='top', zorder=10)
+                fontsize=10, ha='left', va='top', zorder=10)
 
 
 # ─── PT 平台位 ───
@@ -286,7 +286,7 @@ def _draw_one_platform(ax, start, end, price, zone_high, zone_low,
             tp_price = tp[1]
             global_idx = start + local_idx
             ax.plot(global_idx, tp_price, 'o',
-                    color=color, markersize=4, alpha=0.6, zorder=6)
+                    color=color, markersize=6, alpha=0.6, zorder=6)
 
     # 标签
     score_str = str(score)
@@ -298,7 +298,7 @@ def _draw_one_platform(ax, start, end, price, zone_high, zone_low,
         label += " x"
     ax.text(end + 1, price, label,
             fontproperties=_FONT, color=color,
-            fontsize=8, va='center', ha='left', zorder=10)
+            fontsize=10, va='center', ha='left', zorder=10)
 
 
 
@@ -327,7 +327,12 @@ def _draw_ty(ax, ty, dl, df):
     y_hi += pad
 
     # 半透明矩形
-    alpha = 0.15 if ty.score.value >= GradeScore.A.value else 0.08
+    if ty.pending:
+        alpha = 0.05
+    elif ty.score.value >= GradeScore.A.value:
+        alpha = 0.15
+    else:
+        alpha = 0.08
     rect = patches.Rectangle(
         (start, y_lo), end - start, y_hi - y_lo,
         linewidth=1.0, linestyle='--',
@@ -341,10 +346,13 @@ def _draw_ty(ax, ty, dl, df):
             color=color, linewidth=0.8, linestyle='--', alpha=0.4, zorder=4)
 
     # 标签在挤压区上方
-    label = f"TY {ty.squeeze_length}K ({ty.score})"
+    if ty.pending:
+        label = f"TY {ty.squeeze_length}K (待定)"
+    else:
+        label = f"TY {ty.squeeze_length}K ({ty.score})"
     ax.text((start + end) / 2, y_hi + pad * 0.3, label,
             fontproperties=_FONT, color=color,
-            fontsize=7, ha='center', va='bottom', zorder=10,
+            fontsize=9, ha='center', va='bottom', zorder=10,
             bbox=dict(boxstyle='round,pad=0.15', facecolor='white',
                       edgecolor=color, alpha=0.7))
 
@@ -364,7 +372,7 @@ def _draw_dn(ax, ax_vol, dn, dl, df):
         y_range = y_high - y_low
         ax.text(end + 2, y_low + y_range * 0.12, "DN?",
                 fontproperties=_FONT, color='#999999',
-                fontsize=9, ha='left', va='center', zorder=10,
+                fontsize=11, ha='left', va='center', zorder=10,
                 fontweight='bold',
                 bbox=dict(boxstyle='round,pad=0.2', facecolor='#f0f0f0',
                           edgecolor='#999999', alpha=0.8))
@@ -397,12 +405,12 @@ def _draw_dn(ax, ax_vol, dn, dl, df):
         # 向上三角 ▲
         arrow_y = line_top
         ax.plot(idx, arrow_y, marker='^', color=color,
-                markersize=10, zorder=8)
+                markersize=13, zorder=8)
     else:
         # 向下三角 ▼
         arrow_y = line_bottom
         ax.plot(idx, arrow_y, marker='v', color=color,
-                markersize=10, zorder=8)
+                markersize=13, zorder=8)
 
     # 如果是合并K线，用浅色背景标注合并范围
     if dn.merged_count > 1:
@@ -432,7 +440,7 @@ def _draw_dn(ax, ax_vol, dn, dl, df):
     va = 'bottom' if is_bull else 'top'
     ax.text(idx, label_y, label,
             fontproperties=_FONT, color=color,
-            fontsize=7, ha='center', va=va, zorder=10,
+            fontsize=9, ha='center', va=va, zorder=10,
             bbox=dict(boxstyle='round,pad=0.15', facecolor='white',
                       edgecolor=color, alpha=0.7))
 
@@ -440,22 +448,13 @@ def _draw_dn(ax, ax_vol, dn, dl, df):
 # ─── 底部评分摘要 ───
 
 def _draw_summary(fig, card: ScoreCard):
-    """在图表底部边距绘制结论行（极简+详细成对展示）"""
+    """在图表底部边距绘制结论行（只保留每对的极简行）"""
     if card.conclusion_lines:
-        n = len(card.conclusion_lines)
-        y_start = 0.07
-        for i, line in enumerate(card.conclusion_lines[:n]):
-            is_simple = (i % 2 == 0)  # 奇数行=极简, 偶数行=详细
-            if is_simple:
-                pair_idx = i // 2
-                y_pos = y_start - pair_idx * 0.06
-                fontsize = 16
-                fontweight = 'bold'
-            else:
-                pair_idx = i // 2
-                y_pos = y_start - pair_idx * 0.06 - 0.025
-                fontsize = 12
-                fontweight = 'normal'
+        # 只取极简行（偶数索引: 0, 2, 4...）
+        simple_lines = [card.conclusion_lines[i] for i in range(0, len(card.conclusion_lines), 2)]
+        y_start = 0.05
+        for i, line in enumerate(simple_lines):
+            y_pos = y_start - i * 0.04
 
             if line.startswith("看多") or line.startswith("待定(多)"):
                 color = '#27AE60'
@@ -466,11 +465,11 @@ def _draw_summary(fig, card: ScoreCard):
             else:
                 color = '#F39C12'
             fig.text(0.95, y_pos, line,
-                     fontproperties=_FONT, fontsize=fontsize, color=color,
-                     va='center', ha='right', fontweight=fontweight)
+                     fontproperties=_FONT, fontsize=20, color=color,
+                     va='center', ha='right', fontweight='bold')
     else:
         grade_color = '#27AE60' if card.overall_passed else '#E74C3C'
         grade_text = f"综合: {card.overall_grade}"
         fig.text(0.95, 0.05, grade_text,
-                 fontproperties=_FONT, fontsize=16, color=grade_color,
+                 fontproperties=_FONT, fontsize=20, color=grade_color,
                  va='center', ha='right', fontweight='bold')

@@ -5,8 +5,9 @@
 <style>
   .detail-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
   .algo-row { display: flex; align-items: center; gap: 8px; padding: 8px 0; border-bottom: 1px solid #f3f4f6; }
-  .algo-label { width: 36px; font-weight: 700; color: #6b7280; font-size: 13px; }
-  .algo-detail { font-size: 12px; color: #9ca3af; margin-left: 8px; }
+  .algo-label { width: 36px; flex-shrink: 0; font-weight: 700; color: #6b7280; font-size: 13px; }
+  .algo-grade { width: 48px; flex-shrink: 0; text-align: center; }
+  .algo-detail { font-size: 12px; color: #9ca3af; margin-left: 8px; min-width: 0; }
   .label-row { display: flex; align-items: center; gap: 8px; padding: 8px 0; border-bottom: 1px solid #f3f4f6; }
   .label-name { width: 36px; font-weight: 700; color: #6b7280; font-size: 13px; }
   .chart-container { background: white; border-radius: 12px; overflow: hidden; border: 1px solid #e5e7eb; }
@@ -26,54 +27,63 @@
   .tag-dropdown-item.selected { background: #eff6ff; color: #1d4ed8; }
   .tag-dropdown-create { padding: 6px 12px; font-size: 13px; cursor: pointer; color: #3b82f6; border-top: 1px solid #e5e7eb; }
   .tag-dropdown-create:hover { background: #eff6ff; }
+  #sticky-header { transition: box-shadow 0.2s; }
+  #sticky-header.stuck { box-shadow: 0 2px 8px rgba(0,0,0,0.08); }
   @media (max-width: 768px) { .detail-grid { grid-template-columns: 1fr; } }
 </style>
 {% endblock %}
 
 {% block content %}
-<div class="flex items-center justify-between mb-4">
-  <div class="flex items-center gap-4">
-    <a href="/" class="text-gray-400 hover:text-gray-600">&larr; 返回列表</a>
-    <h1 class="text-xl font-bold text-gray-800">
-      <span class="font-mono">{{ stock.symbol }}</span>
-      <span class="text-gray-500 font-normal ml-2">{{ stock.symbol_name }}</span>
-    </h1>
-    <span id="market-tag"></span>
-  </div>
-  <div class="flex items-center gap-2">
-    <button class="btn btn-ghost btn-sm" onclick="reanalyze()" id="btn-reanalyze" title="重新分析此股票">重新分析</button>
-    <button class="btn btn-ghost btn-sm" onclick="goPrev()" title="上一只 (←)">← 上一只</button>
-    <button class="btn btn-ghost btn-sm" onclick="goNext()" title="下一只 (→)">下一只 →</button>
-  </div>
-</div>
-
-<!-- 标签 + 截止日期 -->
-<div class="flex items-center gap-4 mb-4 text-sm">
-  <div class="flex items-center gap-2">
-    <span class="text-gray-500">标签:</span>
-    <div class="tag-select-wrap" id="tag-select-wrap">
-      <div class="tag-select-display" onclick="toggleTagDropdown()">
-        <span id="tag-chips-area"></span>
-        <input type="text" class="tag-select-input" id="tag-search-input"
-          placeholder="搜索或添加标签..."
-          oninput="filterTagDropdown(this.value)"
-          onfocus="openTagDropdown()"
-          onkeydown="tagInputKeydown(event)">
-      </div>
-      <div class="tag-dropdown" id="tag-dropdown"></div>
+<!-- 置顶头部 -->
+<div class="sticky top-0 z-30 bg-gray-50 -mx-6 px-6 pt-2 pb-3 border-b border-gray-200" id="sticky-header">
+  <div class="flex items-center justify-between mb-2">
+    <div class="flex items-center gap-4">
+      <a href="/" class="text-gray-400 hover:text-gray-600">&larr; 返回列表</a>
+      <h1 class="text-xl font-bold text-gray-800">
+        <span class="font-mono">{{ stock.symbol }}</span>
+        <span class="text-gray-500 font-normal ml-2">{{ stock.symbol_name }}</span>
+      </h1>
+      <span id="market-tag"></span>
+    </div>
+    <div class="flex items-center gap-2">
+      <button class="btn btn-ghost btn-sm" onclick="reanalyze()" id="btn-reanalyze" title="重新分析此股票">重新分析</button>
+      <button class="btn btn-ghost btn-sm" onclick="goPrev()" title="上一只 (←)">← 上一只</button>
+      <button class="btn btn-ghost btn-sm" onclick="goNext()" title="下一只 (→)">下一只 →</button>
     </div>
   </div>
-  <div class="flex items-center gap-2">
-    <span class="text-gray-500">截止日期:</span>
-    <span id="stock-end-date" class="font-mono">{{ stock.end_date or '-' }}</span>
-    <button class="text-blue-500 hover:text-blue-700 text-xs" onclick="editEndDate()">修改</button>
+
+  <!-- 标签 + 截止日期 -->
+  <div class="flex items-center gap-4 text-sm">
+    <div class="flex items-center gap-2">
+      <span class="text-gray-500">标签:</span>
+      <div class="tag-select-wrap" id="tag-select-wrap">
+        <div class="tag-select-display" onclick="toggleTagDropdown()">
+          <span id="tag-chips-area"></span>
+          <input type="text" class="tag-select-input" id="tag-search-input"
+            placeholder="搜索或添加标签..."
+            oninput="filterTagDropdown(this.value)"
+            onfocus="openTagDropdown()"
+            onkeydown="tagInputKeydown(event)">
+        </div>
+        <div class="tag-dropdown" id="tag-dropdown"></div>
+      </div>
+    </div>
+    <div class="flex items-center gap-2">
+      <span class="text-gray-500">截止日期:</span>
+      <span id="stock-end-date" class="font-mono">{{ stock.end_date or '-' }}</span>
+      <button class="text-blue-500 hover:text-blue-700 text-xs" onclick="editEndDate()">修改</button>
+    </div>
+    <div class="flex items-center gap-2">
+      <span class="text-gray-500">最后更新:</span>
+      <span id="stock-updated-at" class="font-mono text-gray-400">-</span>
+    </div>
   </div>
 </div>
 
 <!-- 图表 -->
 <div class="chart-container mb-6" id="chart-area">
   {% if stock.status == 'completed' and stock.chart_path %}
-  <img src="/api/stocks/{{ stock.id }}/chart" alt="K线分析图表" loading="eager">
+  <img src="/api/stocks/{{ stock.id }}/chart?t={{ now }}" alt="K线分析图表" loading="eager">
   {% elif stock.status == 'completed' and not stock.chart_path %}
   <div class="text-center py-12 text-gray-400">此股票无图表（历史导入数据）</div>
   {% elif stock.status == 'error' %}
@@ -181,6 +191,7 @@ async function loadDetail() {
     currentStockTags = stockData.tags || [];
     renderTagSelect();
     document.getElementById('stock-end-date').textContent = stockData.end_date || '-';
+    document.getElementById('stock-updated-at').textContent = formatTime(stockData.updated_at);
   } catch(e) { showToast(e.message, 'error'); }
 }
 
@@ -339,7 +350,7 @@ function renderAlgoResults(data) {
         const note = data.label[d+'_note'] || '';
         return '<div class="algo-row">' +
           '<span class="algo-label">' + labels[d] + '</span>' +
-          gradeTag(grade) +
+          '<span class="algo-grade">' + gradeTag(grade) + '</span>' +
           '<span class="algo-detail">' + note + '</span>' +
         '</div>';
       }).join('');
@@ -378,7 +389,7 @@ function renderAlgoResults(data) {
     }
     return '<div class="algo-row">' +
       '<span class="algo-label">' + d.key + '</span>' +
-      gradeTag(grade) +
+      '<span class="algo-grade">' + gradeTag(grade) + '</span>' +
       '<span class="algo-detail">' + d.extra + ' ' + detail + '</span>' +
     '</div>';
   }).join('');
@@ -493,5 +504,27 @@ document.addEventListener('keydown', function(e) {
 
 loadAllTags().then(() => loadDetail());
 loadStockList();
+
+function formatTime(iso) {
+  if (!iso) return '-';
+  try {
+    const d = new Date(iso);
+    const mm = String(d.getMonth()+1).padStart(2,'0');
+    const dd = String(d.getDate()).padStart(2,'0');
+    const hh = String(d.getHours()).padStart(2,'0');
+    const mi = String(d.getMinutes()).padStart(2,'0');
+    return mm + '-' + dd + ' ' + hh + ':' + mi;
+  } catch(e) { return iso.slice(0,16).replace('T',' '); }
+}
+
+// 置顶头部阴影效果
+const stickyHeader = document.getElementById('sticky-header');
+if (stickyHeader) {
+  const observer = new IntersectionObserver(
+    ([e]) => stickyHeader.classList.toggle('stuck', e.intersectionRatio < 1),
+    { threshold: [1], rootMargin: '-1px 0px 0px 0px' }
+  );
+  observer.observe(stickyHeader);
+}
 </script>
 {% endblock %}

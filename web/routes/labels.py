@@ -73,6 +73,9 @@ def upsert_label(stock_id: str, req: LabelUpsert):
                 now, now,
             ))
 
+        # 更新 stocks.updated_at
+        conn.execute("UPDATE stocks SET updated_at=? WHERE id=?", (now, stock_id))
+
     # 同步写入 labeled_cases.csv
     with get_db() as conn:
         sync_labels_to_csv(conn)

@@ -70,8 +70,8 @@
     <thead class="bg-gray-50 border-b">
       <tr>
         <th class="px-2 py-3 text-center w-8"><input type="checkbox" id="check-all" onchange="toggleAll(this.checked)"></th>
-        <th class="px-4 py-3 text-left font-medium text-gray-500">代码</th>
-        <th class="px-4 py-3 text-left font-medium text-gray-500">名称</th>
+        <th class="px-4 py-3 text-left font-medium text-gray-500 cursor-pointer select-none" onclick="toggleSort('symbol')">代码 <span id="sort-icon-symbol" class="text-xs"></span></th>
+        <th class="px-4 py-3 text-left font-medium text-gray-500 cursor-pointer select-none" onclick="toggleSort('symbol_name')">名称 <span id="sort-icon-symbol_name" class="text-xs"></span></th>
         <th class="px-3 py-3 text-center font-medium text-gray-500">市场</th>
         <th class="px-3 py-3 text-left font-medium text-gray-500">标签</th>
         <th class="px-3 py-3 text-center font-medium text-gray-500">截止日期</th>
@@ -83,6 +83,7 @@
         <th class="px-3 py-3 text-center font-medium text-gray-500">DN</th>
         <th class="px-3 py-3 text-center font-medium text-gray-500">仓位</th>
         <th class="px-3 py-3 text-center font-medium text-gray-500">标注</th>
+        <th class="px-3 py-3 text-center font-medium text-gray-500 cursor-pointer select-none" onclick="toggleSort('updated_at')">更新时间 <span id="sort-icon-updated_at" class="text-xs"></span></th>
         <th class="px-3 py-3 text-center font-medium text-gray-500">状态</th>
       </tr>
     </thead>
@@ -170,6 +171,8 @@ let allStocks = [];
 let allTags = [];
 let currentTag = '';  // 当前选中的 tag name
 let selectedIds = new Set();  // 批量选中的 stock id
+let sortField = '';   // 当前排序字段: symbol, symbol_name, updated_at
+let sortDir = '';     // asc / desc
 
 // ─── 初始化 ───
 async function init() {
@@ -253,6 +256,19 @@ function positionTag(pos) {
   return '<span class="tag ' + (m[pos]||'tag-none') + '">' + pos + '</span>';
 }
 
+function formatTime(iso) {
+  if (!iso) return '-';
+  // "2026-03-10T08:11:23" -> "03-10 08:11"
+  try {
+    const d = new Date(iso);
+    const mm = String(d.getMonth()+1).padStart(2,'0');
+    const dd = String(d.getDate()).padStart(2,'0');
+    const hh = String(d.getHours()).padStart(2,'0');
+    const mi = String(d.getMinutes()).padStart(2,'0');
+    return mm + '-' + dd + ' ' + hh + ':' + mi;
+  } catch(e) { return iso.slice(0,16).replace('T',' '); }
+}
+
 function statusBadge(s) {
   const m = {pending:'⏳', analyzing:'🔄', completed:'', error:'❌'};
   return m[s] || '';
@@ -261,16 +277,30 @@ function statusBadge(s) {
 function renderStocks(stocks) {
   const tbody = document.getElementById('stock-tbody');
   if (stocks.length === 0) {
-    tbody.innerHTML = '<tr><td colspan="16" class="text-center py-8 text-gray-400">无匹配数据</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="17" class="text-center py-8 text-gray-400">无匹配数据</td></tr>';
     document.getElementById('stock-count').textContent = '';
     return;
+  }
+
+  // 排序
+  let sorted = [...stocks];
+  if (sortField && sortDir) {
+    sorted.sort((a, b) => {
+      let va = (a[sortField] || '');
+      let vb = (b[sortField] || '');
+      if (typeof va === 'string') va = va.toLowerCase();
+      if (typeof vb === 'string') vb = vb.toLowerCase();
+      if (va < vb) return sortDir === 'asc' ? -1 : 1;
+      if (va > vb) return sortDir === 'asc' ? 1 : -1;
+      return 0;
+    });
   }
 
   const labeled = stocks.filter(s => s.label_status === 'labeled').length;
   document.getElementById('stock-count').textContent =
     '共 ' + stocks.length + ' 只 | 已标注 ' + labeled + '/' + stocks.length;
 
-  tbody.innerHTML = stocks.map(s => {
+  tbody.innerHTML = sorted.map(s => {
     const labelIcon = s.label_status === 'labeled' ? '✅' : '⬜';
     const rowBg = s.status === 'error' ? ' bg-red-50' : '';
     const checked = selectedIds.has(s.id) ? ' checked' : '';
@@ -293,6 +323,7 @@ function renderStocks(stocks) {
       '<td class="px-3 py-3 text-center" onclick="goDetail(\'' + s.id + '\')">' + gradeTag(s.dn_grade) + '</td>' +
       '<td class="px-3 py-3 text-center" onclick="goDetail(\'' + s.id + '\')">' + positionTag(s.position_size) + '</td>' +
       '<td class="px-3 py-3 text-center" onclick="goDetail(\'' + s.id + '\')">' + labelIcon + '</td>' +
+      '<td class="px-3 py-3 text-center text-xs text-gray-400" onclick="goDetail(\'' + s.id + '\')">' + formatTime(s.updated_at) + '</td>' +
       '<td class="px-3 py-3 text-center" onclick="goDetail(\'' + s.id + '\')">' + statusBadge(s.status) + '</td>' +
     '</tr>';
   }).join('');
@@ -302,6 +333,31 @@ function renderStocks(stocks) {
 function applyFilter() {
   saveFilter();
   loadStocks();
+}
+
+function toggleSort(field) {
+  if (sortField === field) {
+    // 同字段循环: asc → desc → 无
+    if (sortDir === 'asc') sortDir = 'desc';
+    else { sortField = ''; sortDir = ''; }
+  } else {
+    sortField = field;
+    sortDir = 'asc';
+  }
+  updateSortIcons();
+  renderStocks(allStocks);
+}
+
+function updateSortIcons() {
+  ['symbol', 'symbol_name', 'updated_at'].forEach(f => {
+    const el = document.getElementById('sort-icon-' + f);
+    if (!el) return;
+    if (sortField === f) {
+      el.textContent = sortDir === 'asc' ? '▲' : '▼';
+    } else {
+      el.textContent = '';
+    }
+  });
 }
 
 function saveFilter() {

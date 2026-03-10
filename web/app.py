@@ -1,6 +1,7 @@
 """FastAPI 应用入口"""
 import sys
 from pathlib import Path
+from datetime import datetime
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.templating import Jinja2Templates
@@ -61,4 +62,5 @@ def page_stock_detail(request: Request, stock_id: str):
     return templates.TemplateResponse("stock_detail.html", {
         "request": request,
         "stock": dict(stock),
+        "now": int(datetime.now().timestamp()),
     })

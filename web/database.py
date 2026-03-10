@@ -62,7 +62,8 @@ def init_db():
             conclusion TEXT,
             position_size TEXT,
             created_at TEXT NOT NULL,
-            analyzed_at TEXT
+            analyzed_at TEXT,
+            updated_at TEXT
         );
 
         CREATE TABLE IF NOT EXISTS tags (
@@ -104,6 +105,9 @@ def init_db():
         CREATE INDEX IF NOT EXISTS idx_labels_stock_id ON labels(stock_id);
         CREATE INDEX IF NOT EXISTS idx_stock_tags_tag ON stock_tags(tag_id);
         """)
+
+        # 增量迁移：为已有数据库添加 updated_at 列
+        _ensure_updated_at_column(conn)
 
 
 def _migrate_from_batches(conn):
@@ -334,3 +338,12 @@ def _migrate_from_batches(conn):
         conn.execute("UPDATE stocks SET chart_path=? WHERE id=?", (new_path, s['id']))
 
     print("  数据库迁移完成！")
+
+
+def _ensure_updated_at_column(conn):
+    """确保 stocks 表有 updated_at 列（增量迁移）"""
+    cols = [r['name'] for r in conn.execute("PRAGMA table_info(stocks)").fetchall()]
+    if 'updated_at' not in cols:
+        conn.execute("ALTER TABLE stocks ADD COLUMN updated_at TEXT")
+        # 用 analyzed_at 或 created_at 回填
+        conn.execute("UPDATE stocks SET updated_at = COALESCE(analyzed_at, created_at)")

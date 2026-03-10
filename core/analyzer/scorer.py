@@ -78,7 +78,7 @@ def run_full_analysis(df: pd.DataFrame,
         sf_direction = 'bullish'
     else:
         sf_direction = _determine_direction_from_pt(pt)
-    sf = analyze_release(df, dl, config, direction=sf_direction)
+    sf = analyze_release(df, dl, config, direction=sf_direction, platform=pt)
     card.sf_result = sf
 
     # ─── 5. TY 统一区间 ───
@@ -110,18 +110,19 @@ def run_full_analysis(df: pd.DataFrame,
 
 
 def _determine_direction_from_pt(pt) -> str:
-    """从PT结果推断方向：只有阻力位→bullish，只有支撑位→bearish，都有→空。"""
+    """
+    从PT结果推断方向。
+    优先看多：仅当只有支撑位达标（无有效阻力位）时才看空，其余情况一律看多。
+    """
     if not pt:
-        return ''
+        return 'bullish'
     has_resistance = (pt.resistance_price > 0
                       and pt.resistance_score.value >= GradeScore.B.value)
     has_support = (pt.support_price > 0
                    and pt.support_score.value >= GradeScore.B.value)
-    if has_resistance and not has_support:
-        return 'bullish'
-    elif has_support and not has_resistance:
+    if has_support and not has_resistance:
         return 'bearish'
-    return ''  # 双平台或无有效平台
+    return 'bullish'
 
 
 def _refine_dl_from_pt(dl, pt):

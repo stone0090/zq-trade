@@ -317,11 +317,11 @@ def _grade_platform(candidate: dict, config: AnalyzerConfig) -> tuple:
     if body_pens == 0:
         # 测试事件有过高点(≥0.25 ATR) → A
         if first_overshoot >= config.pt_first_overshoot_threshold:
-            detail = f"测试过高点{first_overshoot:.2f}ATR"
+            detail = f"首测过高点{first_overshoot:.2f}ATR"
             if shadow_pens > 0:
                 detail += f"，影线穿越{shadow_pens}次"
             return GradeScore.A, detail
-        # 间隔充分 + 无过高点 → S
+        # 间隔充分 → S
         if avg_interval >= ideal_interval:
             detail = f"影线穿越{shadow_pens}次（不影响评级）" if shadow_pens > 0 else ""
             return GradeScore.S, detail
@@ -507,6 +507,9 @@ def _detect_first_approach_overshoot(struct_df: pd.DataFrame, price: float,
 
     # 首次接近后检查的窗口大小（包含首根）
     approach_window = 3
+    # 结构开头的"定位期"不算首次接近过冲：前2根K线是结构初始定位，
+    # 此时的价格波动是建立结构范围的自然过程，不是真正的PT测试
+    settle_period = 2
 
     if pt_type == 'resistance':
         # 1. 找第一根Close < price的K线
@@ -522,6 +525,9 @@ def _detect_first_approach_overshoot(struct_df: pd.DataFrame, price: float,
         for i in range(first_below_idx, len(struct_df)):
             row = struct_df.iloc[i]
             if row['High'] >= price - tolerance:
+                # 结构开头定位期内的波动不算过冲
+                if i < settle_period:
+                    return 0.0
                 # 检查该K线及随后几根K线的最大过冲(相对PT+tolerance)
                 max_overshoot = 0.0
                 end_w = min(i + approach_window, len(struct_df))
@@ -545,6 +551,9 @@ def _detect_first_approach_overshoot(struct_df: pd.DataFrame, price: float,
         for i in range(first_above_idx, len(struct_df)):
             row = struct_df.iloc[i]
             if row['Low'] <= price + tolerance:
+                # 结构开头定位期内的波动不算过冲
+                if i < settle_period:
+                    return 0.0
                 max_overshoot = 0.0
                 end_w = min(i + approach_window, len(struct_df))
                 for j in range(i, end_w):

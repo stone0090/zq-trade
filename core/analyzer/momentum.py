@@ -159,7 +159,8 @@ def analyze_momentum(df: pd.DataFrame,
             f"{'单根' if mc==1 else f'{mc}根合并'}突破，力度{fr:.1f}x → B（{reason_str}）"
         )
     else:
-        result.score = GradeScore.C
+        # 力度不足，视为尚未有效突破 → pending
+        result.pending = True
         reasons = []
         if mc > 2:
             reasons.append(f"{mc}根合并动能偏弱")
@@ -167,7 +168,7 @@ def analyze_momentum(df: pd.DataFrame,
             reasons.append(f"力度仅{fr:.1f}x")
         if not bp:
             reasons.append("未突破平台位")
-        result.reasoning.append("、".join(reasons) + " → C")
+        result.reasoning.append("、".join(reasons) + " → 力度不足，视为待定")
 
     # 瑕疵高点检查结果补充到reasoning
     if flaw_exceeded is not None:

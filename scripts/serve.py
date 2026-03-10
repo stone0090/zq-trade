@@ -22,6 +22,9 @@ def main():
     # 导入历史标注数据（首次运行）
     _import_labeled_cases()
 
+    # 终止已有进程
+    _kill_existing(8000)
+
     # 启动服务器
     import uvicorn
     port = 8000
@@ -148,6 +151,35 @@ def _import_labeled_cases():
             imported += 1
 
         print(f"  已导入 {imported} 条标注记录")
+
+
+def _kill_existing(port: int):
+    """终止占用指定端口的进程"""
+    import subprocess
+    result = subprocess.run(
+        ['netstat', '-ano'], capture_output=True, text=True
+    )
+    pids = set()
+    for line in result.stdout.splitlines():
+        if f':{port}' in line and 'LISTENING' in line:
+            parts = line.split()
+            if parts:
+                try:
+                    pids.add(int(parts[-1]))
+                except ValueError:
+                    pass
+
+    for pid in pids:
+        if pid == os.getpid():
+            continue
+        try:
+            subprocess.run(
+                ['taskkill', '/PID', str(pid), '/F', '/T'],
+                capture_output=True
+            )
+            print(f"  已终止旧进程 (PID {pid})")
+        except Exception:
+            pass
 
 
 if __name__ == '__main__':

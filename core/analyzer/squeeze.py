@@ -2,12 +2,13 @@
 TY 统一区间检测
 
 规则（TRADING_RULES.md）：
-1. 排除DN K线：如果末端K线突破PT阻力位，视为DN触发K线，不计入TY
+1. 排除DN K线：末端K线须close>PT上沿 且 振幅>=小K线阈值，小K线不算DN突破
 2. 从结构末端（排除DN后）向前连续计数小K线
-3. 小K线定义：振幅 < ATR × 0.60
-4. "稍大"K线（ATR 60%~120%）可计入TY，但整个TY区间中小K线占比须≥40%
-5. 振幅 ≥ ATR × 120% → 序列中断
-6. ≤2根 → 待定；3根 → C；≥4根 → B/A/S（由斜率+压缩程度决定）
+3. 小K线定义：实体(|Close-Open|) < ATR × 0.55（看实体大小，不含影线）
+4. 零振幅K线(High==Low)：尾部跳过，序列中视为中断（数据异常）
+5. 实体 ≥ ATR × 0.55 → 序列中断
+6. ≤2根 → 待定（图表仍标注）；3根 → C；≥4根 → B/A/S（由斜率+压缩程度决定）
+7. 影线不影响TY序列计数，仅作为达到B级后的减分项（通过avg_range_ratio体现）
 """
 import numpy as np
 import pandas as pd
@@ -61,10 +62,15 @@ def analyze_squeeze(df: pd.DataFrame,
         large_threshold = atr_large
 
     # ─── 2. 排除DN K线 ───
+    # DN bar必须有足够的力度（range >= small_threshold），小K线不可能是DN突破
     ranges = (struct_df['High'] - struct_df['Low']).values
+    bodies = np.abs(struct_df['Close'] - struct_df['Open']).values
+    opens = struct_df['Open'].values
+    closes = struct_df['Close'].values
     n = len(ranges)
 
-    dn_skip = _count_dn_bars_at_tail(struct_df, platform)
+    dn_skip = _count_dn_bars_at_tail(struct_df, platform,
+                                      min_range=small_threshold)
     effective_tail = n - 1 - dn_skip
 
     if effective_tail < 2:
@@ -76,10 +82,12 @@ def analyze_squeeze(df: pd.DataFrame,
         result.reasoning.append(f"排除末端{dn_skip}根DN K线")
 
     # ─── 3. 从调整后的末端向前连续计数 ───
-    # 当DN已触发（dn_skip>0）时，TY区域在突破K线之前，使用宽松计数
-    # 当DN未触发时，TY在结构末端，使用严格计数（sandwich模式）
+    # TY严格模式以实体(body)为准，影线不影响序列判定
+    # relaxed模式（DN已触发）仍用range，因为DN前区域需要视觉整体评估
+    # 跳空检测：确保TY序列价格连续
     relaxed = dn_skip > 0
-    seq_result = _count_from_tail(ranges, small_threshold, large_threshold,
+    seq_result = _count_from_tail(bodies, ranges, opens, closes,
+                                  small_threshold, large_threshold,
                                   effective_tail, relaxed=relaxed)
 
     if seq_result is None:
@@ -89,17 +97,22 @@ def analyze_squeeze(df: pd.DataFrame,
 
     count, seq_start_local, seq_end_local, slightly_large_count = seq_result
 
-    if count <= 2:
-        result.pending = True
-        result.reasoning.append(f"仅{count}根连续小K线，不足3根，TY=待定")
-        return result
-
-    # ─── 有效TY（≥3根），不再是pending ───
-    result.pending = False
+    # ─── 记录TY序列信息（无论是否达标都需要） ───
     result.squeeze_length = count
     result.squeeze_start_idx = start + seq_start_local
     result.squeeze_end_idx = start + seq_end_local
     result.interruptions = slightly_large_count
+
+    if count <= 2:
+        result.pending = True
+        result.reasoning.append(f"仅{count}根连续小K线，不足3根，TY=待定")
+        # 仍计算avg_range供图表标注使用
+        squeeze_ranges = ranges[seq_start_local: seq_end_local + 1]
+        result.avg_range = round(float(squeeze_ranges.mean()), 4)
+        return result
+
+    # ─── 有效TY（≥3根），不再是pending ───
+    result.pending = False
 
     # ─── 4. squeeze区统计 ───
     squeeze_df = df.iloc[result.squeeze_start_idx: result.squeeze_end_idx + 1]
@@ -143,7 +156,7 @@ def analyze_squeeze(df: pd.DataFrame,
     # 补充信息
     if slightly_large_count > 0:
         result.reasoning.append(
-            f"含{slightly_large_count}根稍大K线（ATR 60%~120%）")
+            f"含{slightly_large_count}根稍大K线（ATR 55%~110%）")
     result.reasoning.append(
         f"均幅: {avg_range:.4f}（ATR的{avg_range_ratio:.1%}），基准ATR: {base_atr:.4f}"
     )
@@ -156,12 +169,13 @@ def analyze_squeeze(df: pd.DataFrame,
     return result
 
 
-def _count_dn_bars_at_tail(struct_df: pd.DataFrame, platform) -> int:
+def _count_dn_bars_at_tail(struct_df: pd.DataFrame, platform,
+                           min_range: float = 0) -> int:
     """
     检测结构末端的DN触发K线数量。
 
-    DN触发K线：收盘价突破PT阻力区上沿（做多），从末端向前连续检测，
-    最多跳过3根。
+    DN触发K线：收盘价突破PT阻力区上沿（做多），且K线振幅 >= min_range
+    （小K线收盘价微超PT区间不算DN突破）。从末端向前连续检测，最多跳过3根。
     """
     if platform is None:
         return 0
@@ -173,8 +187,10 @@ def _count_dn_bars_at_tail(struct_df: pd.DataFrame, platform) -> int:
     n = len(struct_df)
     count = 0
     for i in range(n - 1, max(n - 4, -1), -1):
-        close = float(struct_df.iloc[i]['Close'])
-        if close > pt_zone_high:
+        row = struct_df.iloc[i]
+        close = float(row['Close'])
+        bar_range = float(row['High'] - row['Low'])
+        if close > pt_zone_high and bar_range >= min_range:
             count = (n - 1) - i + 1
         else:
             break
@@ -182,7 +198,10 @@ def _count_dn_bars_at_tail(struct_df: pd.DataFrame, platform) -> int:
     return count
 
 
-def _count_from_tail(ranges: np.ndarray,
+def _count_from_tail(bodies: np.ndarray,
+                     ranges: np.ndarray,
+                     opens: np.ndarray,
+                     closes: np.ndarray,
                      small_threshold: float,
                      large_threshold: float,
                      tail_end: int = -1,
@@ -190,27 +209,20 @@ def _count_from_tail(ranges: np.ndarray,
     """
     从指定末端向前连续计数小K线。
 
-    strict模式（relaxed=False，DN未触发时）：
-    - 最后1根若非小K线可跳过1根；最后2根都不是 → None
-    - 允许最多1根"稍大"K线（sandwich：前方须有小K线），计入根数
-    - 遇到"明显大"K线（≥ large_threshold）→ 序列中断
+    strict模式（relaxed=False，DN未触发/待定时）：
+    - 以实体(body)判断K线大小，影线不影响计数
+    - 跳过尾部连续零振幅K线（range==0，数据异常）
+    - 遇到实体 ≥ small_threshold、零振幅或跳空 → 序列中断
 
-    relaxed模式（relaxed=True，DN已触发时）：
-    - TY区域在DN突破K线之前，用宽松模式寻找压缩区
-    - 连续计数所有 < large_threshold 的K线
+    relaxed模式（relaxed=True，DN已确认触发时）：
+    - 以振幅(range)判断，保留视觉整体评估
+    - 连续计数所有 range < large_threshold 的K线
     - 计数完成后验证：小K线占比须≥40%，否则无效
-
-    Args:
-        ranges: K线振幅数组
-        small_threshold: 小K线阈值
-        large_threshold: 大K线阈值（序列中断）
-        tail_end: 计数起点索引（-1表示使用数组末端）
-        relaxed: True=宽松模式（DN已触发），False=严格模式
 
     Returns:
         (count, start_idx, end_idx, slightly_large_count) 或 None
     """
-    n = len(ranges)
+    n = len(bodies)
     if n == 0:
         return None
 
@@ -219,54 +231,67 @@ def _count_from_tail(ranges: np.ndarray,
 
     tail_idx = min(tail_end, n - 1)
 
-    # 确定起点：最多跳过1根大K线
-    if ranges[tail_idx] < large_threshold:
-        pass
-    elif tail_idx >= 1 and ranges[tail_idx - 1] < large_threshold:
-        tail_idx = tail_idx - 1
-    else:
+    # 跳过尾部连续零振幅K线（range==0，数据异常，如非交易时段）
+    while tail_idx >= 0 and ranges[tail_idx] == 0:
+        tail_idx -= 1
+    if tail_idx < 0:
         return None
 
     if relaxed:
+        # relaxed模式：用range判断，跳过1根大K线
+        if ranges[tail_idx] < large_threshold:
+            pass
+        elif tail_idx >= 1 and ranges[tail_idx - 1] < large_threshold:
+            tail_idx = tail_idx - 1
+        else:
+            return None
         return _count_relaxed(ranges, small_threshold, large_threshold, tail_idx)
     else:
-        return _count_strict(ranges, small_threshold, large_threshold, tail_idx)
+        # strict模式：用body判断，跳过1根实体大的K线
+        if bodies[tail_idx] < large_threshold:
+            pass
+        elif tail_idx >= 1 and bodies[tail_idx - 1] < large_threshold:
+            tail_idx = tail_idx - 1
+        else:
+            return None
+        return _count_strict(bodies, ranges, opens, closes,
+                             small_threshold, tail_idx)
 
 
-def _count_strict(ranges, small_threshold, large_threshold, tail_idx):
-    """严格模式：sandwich容忍，最多1根稍大K线作为TY区间边界。"""
+def _count_strict(bodies, ranges, opens, closes, small_threshold, tail_idx):
+    """
+    严格模式：从tail_idx向前连续计数实体小的K线。
+
+    以实体(|Close-Open|)判断K线大小，影线不影响计数。
+    零振幅K线(range==0)视为数据异常中断；十字星(body==0, range>0)视为小K线。
+    跳空检测：若相邻K线间价格跳空 > small_threshold，视为不连续中断。
+    """
     count = 0
-    slightly_large_used = 0
-    max_slightly_large = 1
     seq_end = tail_idx
-    sandwich_break = False
+    seq_start = tail_idx
 
     i = tail_idx
     while i >= 0:
-        r = ranges[i]
-        if r < small_threshold:
-            count += 1
-        elif r < large_threshold:
-            if (slightly_large_used < max_slightly_large
-                    and i > 0 and ranges[i - 1] < small_threshold):
-                slightly_large_used += 1
-                count += 1
-                sandwich_break = True
-                break  # 稍大K线是TY区间的起点边界，不再向前延伸
-            else:
-                break
-        else:
+        if ranges[i] == 0:  # 数据异常（无交易），中断
             break
+        if bodies[i] >= small_threshold:  # 实体过大，中断
+            break
+        # 跳空检测：当前K线与后一根（已计入序列）之间有价格跳空
+        if count > 0:
+            gap = abs(opens[i + 1] - closes[i])
+            if gap > small_threshold:
+                break
+        count += 1
+        seq_start = i
         i -= 1
 
-    seq_start = i if sandwich_break else i + 1
     if count == 0:
         return None
-    return (count, seq_start, seq_end, slightly_large_used)
+    return (count, seq_start, seq_end, 0)
 
 
 def _count_relaxed(ranges, small_threshold, large_threshold, tail_idx):
-    """宽松模式：计数所有非大K线，验证小K线占比≥40%。"""
+    """宽松模式：用振幅(range)计数所有非大K线，验证小K线占比≥40%。"""
     count = 0
     small_count = 0
     seq_end = tail_idx
@@ -274,6 +299,8 @@ def _count_relaxed(ranges, small_threshold, large_threshold, tail_idx):
     i = tail_idx
     while i >= 0:
         r = ranges[i]
+        if r == 0:  # 数据异常，中断
+            break
         if r < large_threshold:
             count += 1
             if r < small_threshold:
@@ -314,9 +341,15 @@ def _grade_by_quality(count: int, slope_pct: float,
             avg_range_ratio < 0.35):
         return GradeScore.S
 
+    # 近零斜率 + 压缩度尚可 → A（极平斜率补偿略高的平均振幅，
+    # 典型场景：TY序列含1根稍大K线拉高了均值，但斜率几乎为零）
+    if (slope_abs < slope_s and
+            avg_range_ratio <= 0.65):
+        return GradeScore.A
+
     # A: 斜率较平 + 压缩紧密
     if (slope_abs < slope_a and
-            avg_range_ratio <= 0.50):
+            avg_range_ratio <= 0.55):
         return GradeScore.A
 
     # 根数多也可以补偿斜率/压缩的不足

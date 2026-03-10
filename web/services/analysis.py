@@ -165,7 +165,7 @@ def analyze_stocks_sync(stock_ids: list, db_path: str, chart_dir: str):
                         dl_grade=?, pt_grade=?, lk_grade=?,
                         sf_grade=?, ty_grade=?, dn_grade=?,
                         conclusion=?, position_size=?,
-                        analyzed_at=?
+                        analyzed_at=?, updated_at=?
                     WHERE id=?
                 """, (
                     result['symbol_name'], result['market'],
@@ -179,6 +179,7 @@ def analyze_stocks_sync(stock_ids: list, db_path: str, chart_dir: str):
                     result['grades']['dn_grade'],
                     result['conclusion'],
                     result['position_size'],
+                    datetime.now().isoformat(),
                     datetime.now().isoformat(),
                     stock_id,
                 ))

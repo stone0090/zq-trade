@@ -102,6 +102,9 @@ def analyze_contour(df: pd.DataFrame,
 
     # ─── 6b. 新增视觉特征检测 ───
 
+    # 趋势检测：单边趋势的结构不是真正的盘整轮廓
+    trend_ratio = _calc_trend_ratio(struct_df)
+
     # 对称性：前半段和后半段收盘价模式的相关性
     symmetry = _calc_symmetry(struct_df['Close'].values)
     result.symmetry_score = round(symmetry, 4)
@@ -115,17 +118,42 @@ def analyze_contour(df: pd.DataFrame,
     density = _calc_density(struct_df)
     result.density_score = round(density, 4)
 
+    # 波峰均匀性：各波峰高度是否相对均匀
+    has_uneven_peaks, peak_uneven_detail = _check_peak_uniformity(struct_df)
+
+    # 全程质量一致性：各段K线是否质量均匀
+    has_inconsistent_seg, seg_inconsist_detail = _check_segment_consistency(struct_df)
+
     # ─── 7. 评分（规则驱动，匹配视觉感知判断） ───
     n = len(struct_df)
     is_short = n < 90  # 短结构的密集度/异常指标不可靠，放宽
 
+    # 单边趋势检测：drift_ratio > 0.40 表示结构是明显的单边走势，不是盘整
+    is_trending = trend_ratio > 0.40
+    if is_trending:
+        result.score = GradeScore.C
+        result.reasoning.append(
+            f"单边趋势（首尾偏移占结构振幅{trend_ratio:.0%}），非盘整轮廓 → C"
+        )
+        result.passed = False
+        result.reasoning.append(
+            f"对称性: {symmetry:.2f}，密集度: {density:.2f}，"
+            f"尾部破位: {'是('+str(tail_break_pct)+'%)' if tail_break else '否'}，"
+            f"振幅CV: {range_cv:.3f}，异常K线: {abnormal_count}根({abnormal_ratio:.1%})，"
+            f"波浪规则性: {wave_regularity:.2f}"
+        )
+        return result
+
     # 判定因子
     has_severe_tail_break = tail_break and tail_break_pct > 2.0
     has_mild_tail_break = tail_break and tail_break_pct <= 2.0
-    has_good_symmetry = symmetry >= 0.55
+    symmetry_threshold = 0.40 if is_short else 0.55
+    has_good_symmetry = symmetry >= symmetry_threshold
     has_poor_density = density < 0.40 and not is_short
-    abnormal_limit = 0.07 if is_short else 0.05
+    abnormal_limit = 0.12 if is_short else 0.05
     has_many_abnormal = abnormal_ratio > abnormal_limit
+    # C级使用更高阈值（短结构0.12，非短0.07）
+    c_abnormal_threshold = 0.12 if is_short else 0.07
 
     # 决策树
     deficiencies = []
@@ -136,11 +164,16 @@ def analyze_contour(df: pd.DataFrame,
     elif not tail_break and not has_poor_density and not has_many_abnormal:
         # 无明显问题 → S
         result.score = GradeScore.S
+    elif has_mild_tail_break and has_good_symmetry and abnormal_ratio > (0.15 if is_short else 0.07):
+        # 轻度破位 + 对称尚可但异常K线显著偏多 → B
+        result.score = GradeScore.B
+        deficiencies.append(f"尾部破位({tail_break_pct:.1f}%)")
+        deficiencies.append(f"异常K线偏多({abnormal_count}根)")
     elif has_mild_tail_break and has_good_symmetry:
-        # 轻度破位但整体对称 → A
+        # 轻度破位但整体对称、异常不严重 → A
         result.score = GradeScore.A
         deficiencies.append(f"尾部稍凌厉({tail_break_pct:.1f}%)")
-    elif has_mild_tail_break and not has_good_symmetry and abnormal_ratio > 0.07:
+    elif has_mild_tail_break and not has_good_symmetry and abnormal_ratio > c_abnormal_threshold:
         # 破位 + 不对称 + 异常多 → C
         result.score = GradeScore.C
         deficiencies.append(f"尾部破位({tail_break_pct:.1f}%)")
@@ -182,6 +215,22 @@ def analyze_contour(df: pd.DataFrame,
         result.reasoning.append(f"形态工整，无明显缺陷 → S")
     else:
         result.reasoning.append(f"{reason} → {result.score.name}")
+
+    # ─── 7b. 波峰均匀性和全程质量一致性（后处理降级，短结构跳过） ───
+    if not is_short:
+        if has_uneven_peaks:
+            # 波峰不均匀 → 降一档（S→A, A→B）
+            if result.score == GradeScore.S:
+                result.score = GradeScore.A
+                result.reasoning.append(f"{peak_uneven_detail} → S降至A")
+            elif result.score == GradeScore.A:
+                result.score = GradeScore.B
+                result.reasoning.append(f"{peak_uneven_detail} → A降至B")
+
+        if has_inconsistent_seg and result.score == GradeScore.S:
+            # 局部质量差 → S降为A
+            result.score = GradeScore.A
+            result.reasoning.append(f"{seg_inconsist_detail} → S降至A")
 
     result.passed = result.score.value >= GradeScore.B.value
 
@@ -340,3 +389,115 @@ def _calc_density(struct_df: pd.DataFrame) -> float:
     density = max(0.0, min(1.0, 1.0 - (ratio - 0.5) / 1.0))
 
     return round(density, 4)
+
+
+def _calc_trend_ratio(struct_df: pd.DataFrame) -> float:
+    """
+    计算结构的趋势程度。
+
+    用首尾1/4区间的收盘均价之差占结构总振幅的比率来衡量。
+    比率越高说明结构越偏单边趋势（非盘整），LK评分应越低。
+
+    Returns:
+        trend_ratio: 0.0~1.0，越大越趋势化
+    """
+    n = len(struct_df)
+    if n < 10:
+        return 0.0
+
+    close = struct_df['Close'].values
+    q = max(n // 4, 3)
+    first_q_avg = float(np.mean(close[:q]))
+    last_q_avg = float(np.mean(close[-q:]))
+    struct_range = float(struct_df['High'].max() - struct_df['Low'].min())
+
+    if struct_range <= 0:
+        return 0.0
+
+    return abs(first_q_avg - last_q_avg) / struct_range
+
+
+def _check_peak_uniformity(struct_df: pd.DataFrame) -> tuple:
+    """
+    检查波峰高度是否均匀。
+    将结构分为前/中/后三段，比较各段的波动振幅。
+    如果中间段振幅显著小于两端（中间波峰小、两边波峰大），返回不均匀。
+
+    Returns:
+        (is_uneven: bool, detail: str)
+    """
+    n = len(struct_df)
+    if n < 30:
+        return False, ""
+
+    third = n // 3
+    highs = struct_df['High'].values
+    lows = struct_df['Low'].values
+
+    # 各段的波动振幅（最高-最低）
+    seg_ranges = []
+    for s, e in [(0, third), (third, 2 * third), (2 * third, n)]:
+        seg_range = float(np.max(highs[s:e]) - np.min(lows[s:e]))
+        seg_ranges.append(seg_range)
+
+    mid_range = seg_ranges[1]
+    edge_avg = (seg_ranges[0] + seg_ranges[2]) / 2
+
+    if edge_avg > 0:
+        ratio = mid_range / edge_avg
+        # 中间段振幅 < 两端平均的50% → 明显不均匀
+        if ratio < 0.50:
+            return True, f"波峰不均匀（中间振幅仅为两端的{ratio:.0%}）"
+
+    # 检查是否有某段振幅远大于其他段（局部走势异常剧烈）
+    for idx in range(3):
+        others = [seg_ranges[j] for j in range(3) if j != idx]
+        other_avg = sum(others) / len(others) if others else 0
+        if other_avg > 0 and seg_ranges[idx] > other_avg * 2.0:
+            seg_name = ["前1/3", "中间", "后1/3"][idx]
+            return True, f"波峰不均匀（{seg_name}振幅为其他段的{seg_ranges[idx]/other_avg:.0%}）"
+
+    return False, ""
+
+
+def _check_segment_consistency(struct_df: pd.DataFrame) -> tuple:
+    """
+    检查轮廓质量是否全程一致。
+    将结构分为三段，比较各段K线振幅的变异系数(CV)。
+    如果某段CV显著高于其他段（走势凌厉/杂乱），说明局部质量差。
+
+    Returns:
+        (is_inconsistent: bool, detail: str)
+    """
+    n = len(struct_df)
+    if n < 30:
+        return False, ""
+
+    third = n // 3
+    seg_names = ["前1/3", "中间", "后1/3"]
+    seg_cvs = []
+
+    for s, e in [(0, third), (third, 2 * third), (2 * third, n)]:
+        seg = struct_df.iloc[s:e]
+        ranges = (seg['High'] - seg['Low']).values
+        mean_r = float(ranges.mean())
+        std_r = float(ranges.std())
+        cv = std_r / mean_r if mean_r > 0 else 0
+        seg_cvs.append(cv)
+
+    avg_cv = np.mean(seg_cvs)
+    if avg_cv <= 0:
+        return False, ""
+
+    # 找出CV最高的段
+    max_idx = int(np.argmax(seg_cvs))
+    max_cv = seg_cvs[max_idx]
+
+    # 该段CV > 其他段平均的2倍 → 局部质量差
+    other_cvs = [cv for i, cv in enumerate(seg_cvs) if i != max_idx]
+    other_avg = np.mean(other_cvs) if other_cvs else avg_cv
+
+    if other_avg > 0 and max_cv > other_avg * 2.0:
+        return True, f"{seg_names[max_idx]}走势相对凌厉（CV {max_cv:.2f} vs 其余 {other_avg:.2f}）"
+
+    return False, ""

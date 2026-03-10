@@ -262,8 +262,8 @@ class AnalyzerConfig:
     lk_narrow_penalty: float = 0.10       # 窄结构评分惩罚
 
     # TY 统一区间
-    ty_squeeze_atr_ratio: float = 0.70     # 小K线判定(振幅 < ATR*ratio)
-    ty_slightly_large_ratio: float = 1.20  # 稍大K线上限(75%~120%间容忍1根,≈平均ATR)
+    ty_squeeze_atr_ratio: float = 0.55     # 小K线判定(振幅 < ATR*ratio)，严格阈值
+    ty_slightly_large_ratio: float = 1.10  # 稍大K线上限(55%~110%间容忍1根)
     ty_scan_window: int = 30               # 从尾部扫描的K线数
     ty_max_interruptions: int = 1          # 允许夹杂的非小K线数
     ty_max_gap_to_trigger: int = 1         # 与触发K线最大间距

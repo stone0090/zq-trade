@@ -70,10 +70,8 @@ class StockListItem(BaseModel):
     position_size: Optional[str]
     label_status: str  # "labeled" | "unlabeled"
     analyzed_at: Optional[str]
+    updated_at: Optional[str]
     tags: List[str] = []
-
-
-# ─── 股票详情 ───
 
 class StockDetail(BaseModel):
     id: str
@@ -94,6 +92,7 @@ class StockDetail(BaseModel):
     position_size: Optional[str]
     label: Optional[dict]
     analyzed_at: Optional[str]
+    updated_at: Optional[str]
     tags: List[str] = []
 
 

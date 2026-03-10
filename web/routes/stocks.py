@@ -12,6 +12,7 @@ from web.database import get_db
 from web.models import StockListItem, StockDetail, StockImport, StockUpdate, BatchUpdate, ImportResult, AnalysisProgress
 from web.config import DB_PATH, CHARTS_DIR
 from web.services.analysis import analyze_stocks_sync, analyze_stock as analyze_single, get_progress, is_running
+from web.services.export import sync_labels_to_csv
 
 router = APIRouter(prefix="/api/stocks", tags=["stocks"])
 
@@ -55,11 +56,12 @@ def list_stocks(
                    COALESCE(s.conclusion, l.reason) as conclusion,
                    COALESCE(s.position_size, l.verdict) as position_size,
                    s.analyzed_at,
+                   s.updated_at,
                    CASE WHEN l.id IS NOT NULL THEN 'labeled' ELSE 'unlabeled' END as label_status
             FROM stocks s
             LEFT JOIN labels l ON l.stock_id = s.id
             {where}
-            ORDER BY s.created_at DESC
+            ORDER BY s.created_at ASC
         """
         rows = conn.execute(query, params).fetchall()
 
@@ -317,6 +319,7 @@ def get_stock(stock_id: str):
         position_size=row['position_size'],
         label=label,
         analyzed_at=row['analyzed_at'],
+        updated_at=row['updated_at'] if 'updated_at' in row.keys() else None,
         tags=tags,
     )
 
@@ -329,7 +332,8 @@ def update_stock(stock_id: str, req: StockUpdate):
             raise HTTPException(404, "股票不存在")
 
         if req.end_date is not None:
-            conn.execute("UPDATE stocks SET end_date=? WHERE id=?", (req.end_date, stock_id))
+            conn.execute("UPDATE stocks SET end_date=?, updated_at=? WHERE id=?",
+                         (req.end_date, datetime.now().isoformat(), stock_id))
 
         if req.tags is not None:
             # 替换式更新 tags
@@ -352,6 +356,10 @@ def update_stock(stock_id: str, req: StockUpdate):
                     "INSERT INTO stock_tags (stock_id, tag_id) VALUES (?,?)",
                     (stock_id, tag_id)
                 )
+            # 更新 updated_at
+            conn.execute("UPDATE stocks SET updated_at=? WHERE id=?",
+                         (datetime.now().isoformat(), stock_id))
+            sync_labels_to_csv(conn)
 
     return {"message": "已更新"}
 
@@ -420,5 +428,6 @@ def _row_to_list_item(row, tags: list) -> StockListItem:
         position_size=row['position_size'],
         label_status=row['label_status'],
         analyzed_at=row['analyzed_at'],
+        updated_at=row['updated_at'] if 'updated_at' in row.keys() else None,
         tags=tags,
     )
