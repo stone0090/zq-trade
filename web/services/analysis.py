@@ -3,10 +3,8 @@ import sys
 import json
 import threading
 import time
-import uuid
 from pathlib import Path
 from datetime import datetime
-from enum import Enum
 
 # 确保项目根目录在路径中
 _root = Path(__file__).resolve().parent.parent.parent
@@ -23,6 +21,27 @@ import matplotlib.pyplot as plt
 
 # matplotlib 非线程安全，加锁保护
 _chart_lock = threading.Lock()
+
+# ─── 全局分析进度追踪 ───
+_progress_lock = threading.Lock()
+_analysis_progress = {
+    'running': False,
+    'total': 0,
+    'completed': 0,
+    'current_symbol': None,
+}
+
+
+def get_progress() -> dict:
+    """获取当前分析进度"""
+    with _progress_lock:
+        return dict(_analysis_progress)
+
+
+def is_running() -> bool:
+    """是否有分析在运行"""
+    with _progress_lock:
+        return _analysis_progress['running']
 
 
 def analyze_stock(symbol: str, end_date: str = None, chart_dir: str = None) -> dict:
@@ -84,9 +103,10 @@ def analyze_stock(symbol: str, end_date: str = None, chart_dir: str = None) -> d
     }
 
 
-def analyze_batch_sync(batch_id: str, db_path: str, chart_base_dir: str):
+def analyze_stocks_sync(stock_ids: list, db_path: str, chart_dir: str):
     """
     同步执行批量分析（在后台线程中调用）。
+    按 stock_ids 列表逐个分析，更新全局进度。
     """
     import sqlite3
     conn = sqlite3.connect(db_path)
@@ -94,17 +114,28 @@ def analyze_batch_sync(batch_id: str, db_path: str, chart_base_dir: str):
     conn.execute("PRAGMA foreign_keys=ON")
 
     try:
-        # 更新批次状态
-        conn.execute("UPDATE batches SET status='running' WHERE id=?", (batch_id,))
-        conn.commit()
-
-        # 获取待分析股票
+        # 获取待分析股票信息
+        if not stock_ids:
+            return
+        placeholders = ','.join('?' * len(stock_ids))
         rows = conn.execute(
-            "SELECT id, symbol, end_date FROM stocks WHERE batch_id=? AND status='pending'",
-            (batch_id,)
+            f"SELECT id, symbol, end_date FROM stocks WHERE id IN ({placeholders})",
+            stock_ids
         ).fetchall()
 
-        chart_dir = str(Path(chart_base_dir) / batch_id)
+        with _progress_lock:
+            _analysis_progress['running'] = True
+            _analysis_progress['total'] = len(rows)
+            _analysis_progress['completed'] = 0
+            _analysis_progress['current_symbol'] = None
+
+        # 重置股票状态
+        for row in rows:
+            conn.execute(
+                "UPDATE stocks SET status='pending', error_message=NULL WHERE id=?",
+                (row['id'],)
+            )
+        conn.commit()
 
         for i, row in enumerate(rows):
             stock_id = row['id']
@@ -113,6 +144,9 @@ def analyze_batch_sync(batch_id: str, db_path: str, chart_base_dir: str):
 
             if i > 0:
                 time.sleep(2)
+
+            with _progress_lock:
+                _analysis_progress['current_symbol'] = symbol
 
             conn.execute(
                 "UPDATE stocks SET status='analyzing' WHERE id=?",
@@ -148,12 +182,6 @@ def analyze_batch_sync(batch_id: str, db_path: str, chart_base_dir: str):
                     datetime.now().isoformat(),
                     stock_id,
                 ))
-
-                # 更新批次进度
-                conn.execute(
-                    "UPDATE batches SET completed_count = completed_count + 1 WHERE id=?",
-                    (batch_id,)
-                )
                 conn.commit()
 
             except Exception as e:
@@ -161,20 +189,13 @@ def analyze_batch_sync(batch_id: str, db_path: str, chart_base_dir: str):
                     "UPDATE stocks SET status='error', error_message=? WHERE id=?",
                     (str(e), stock_id)
                 )
-                conn.execute(
-                    "UPDATE batches SET completed_count = completed_count + 1 WHERE id=?",
-                    (batch_id,)
-                )
                 conn.commit()
 
-        conn.execute("UPDATE batches SET status='completed' WHERE id=?", (batch_id,))
-        conn.commit()
+            with _progress_lock:
+                _analysis_progress['completed'] += 1
 
-    except Exception as e:
-        conn.execute(
-            "UPDATE batches SET status='failed' WHERE id=?",
-            (batch_id,)
-        )
-        conn.commit()
     finally:
+        with _progress_lock:
+            _analysis_progress['running'] = False
+            _analysis_progress['current_symbol'] = None
         conn.close()

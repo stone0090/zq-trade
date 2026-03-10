@@ -38,14 +38,27 @@ def analyze_squeeze(df: pd.DataFrame,
         result.reasoning.append("结构区间数据不足，无法检测统一区间")
         return result
 
-    # ─── 1. ATR 基准 ───
+    # ─── 1. ATR 基准 + 视觉尺度 ───
     atr_series = calc_atr(struct_df)
     base_atr = atr_series.mean()
     if base_atr <= 0:
         base_atr = (struct_df['High'] - struct_df['Low']).mean()
 
-    small_threshold = base_atr * config.ty_squeeze_atr_ratio       # < 此值为小K线
-    large_threshold = base_atr * config.ty_slightly_large_ratio     # ≥ 此值中断序列
+    atr_small = base_atr * config.ty_squeeze_atr_ratio
+    atr_large = base_atr * config.ty_slightly_large_ratio
+
+    # 视觉尺度：当结构ATR显著低于全局ATR时（结构处于压缩区），
+    # 用全局ATR作为参考，避免阈值过严导致视觉上明显的小K线被遗漏
+    full_atr = calc_atr(df).mean()
+    visual_scale_active = base_atr < full_atr * config.ty_visual_atr_gate
+    if visual_scale_active:
+        visual_small = full_atr * config.ty_squeeze_atr_ratio
+        visual_large = full_atr * config.ty_slightly_large_ratio
+        small_threshold = max(atr_small, visual_small)
+        large_threshold = max(atr_large, visual_large)
+    else:
+        small_threshold = atr_small
+        large_threshold = atr_large
 
     # ─── 2. 排除DN K线 ───
     ranges = (struct_df['High'] - struct_df['Low']).values
@@ -92,7 +105,9 @@ def analyze_squeeze(df: pd.DataFrame,
     squeeze_df = df.iloc[result.squeeze_start_idx: result.squeeze_end_idx + 1]
     squeeze_ranges = ranges[seq_start_local: seq_end_local + 1]
     avg_range = float(squeeze_ranges.mean())
-    avg_range_ratio = avg_range / base_atr if base_atr > 0 else 0
+    # 当视觉尺度生效时，用全局ATR计算压缩比更能反映视觉感受
+    grade_base = full_atr if visual_scale_active else base_atr
+    avg_range_ratio = avg_range / grade_base if grade_base > 0 else 0
 
     result.avg_range = round(avg_range, 4)
     result.avg_range_ratio = round(avg_range_ratio, 4)
@@ -115,7 +130,8 @@ def analyze_squeeze(df: pd.DataFrame,
     elif count >= 4:
         # ≥4根基本达标，由斜率+压缩程度决定B/A/S
         result.score = _grade_by_quality(
-            count, slope_pct, avg_range_ratio, config
+            count, slope_pct, avg_range_ratio, config,
+            visual_scale=visual_scale_active
         )
         result.reasoning.append(
             f"{count}根小K线，斜率{slope_pct:.4f}%，"
@@ -131,6 +147,11 @@ def analyze_squeeze(df: pd.DataFrame,
     result.reasoning.append(
         f"均幅: {avg_range:.4f}（ATR的{avg_range_ratio:.1%}），基准ATR: {base_atr:.4f}"
     )
+    if visual_scale_active:
+        result.reasoning.append(
+            f"视觉尺度生效：全局ATR{full_atr:.4f}，"
+            f"小K线阈值{small_threshold:.4f}(视觉) > {atr_small:.4f}(ATR)"
+        )
 
     return result
 
@@ -213,11 +234,12 @@ def _count_from_tail(ranges: np.ndarray,
 
 
 def _count_strict(ranges, small_threshold, large_threshold, tail_idx):
-    """严格模式：sandwich容忍，最多1根稍大K线。"""
+    """严格模式：sandwich容忍，最多1根稍大K线作为TY区间边界。"""
     count = 0
     slightly_large_used = 0
     max_slightly_large = 1
     seq_end = tail_idx
+    sandwich_break = False
 
     i = tail_idx
     while i >= 0:
@@ -229,13 +251,15 @@ def _count_strict(ranges, small_threshold, large_threshold, tail_idx):
                     and i > 0 and ranges[i - 1] < small_threshold):
                 slightly_large_used += 1
                 count += 1
+                sandwich_break = True
+                break  # 稍大K线是TY区间的起点边界，不再向前延伸
             else:
                 break
         else:
             break
         i -= 1
 
-    seq_start = i + 1
+    seq_start = i if sandwich_break else i + 1
     if count == 0:
         return None
     return (count, seq_start, seq_end, slightly_large_used)
@@ -272,25 +296,31 @@ def _count_relaxed(ranges, small_threshold, large_threshold, tail_idx):
 
 def _grade_by_quality(count: int, slope_pct: float,
                       avg_range_ratio: float,
-                      config: AnalyzerConfig) -> GradeScore:
+                      config: AnalyzerConfig,
+                      visual_scale: bool = False) -> GradeScore:
     """
     ≥4根时按斜率和压缩程度分级。
     斜率越平、压缩越紧 → 等级越高。
+    当视觉尺度生效时（结构处于压缩区），适当放宽斜率要求。
     """
     slope_abs = abs(slope_pct)
 
+    # 视觉尺度下放宽斜率阈值：压缩区内的轻微漂移在全局视角下不显著
+    slope_a = config.ty_slope_a_threshold * (2.0 if visual_scale else 1.0)
+    slope_s = config.ty_slope_s_threshold
+
     # S: 斜率接近水平 + K线高度压缩
-    if (slope_abs < config.ty_slope_s_threshold and
+    if (slope_abs < slope_s and
             avg_range_ratio < 0.35):
         return GradeScore.S
 
     # A: 斜率较平 + 压缩紧密
-    if (slope_abs < config.ty_slope_a_threshold and
-            avg_range_ratio < 0.50):
+    if (slope_abs < slope_a and
+            avg_range_ratio <= 0.50):
         return GradeScore.A
 
     # 根数多也可以补偿斜率/压缩的不足
-    if count >= 6 and slope_abs < config.ty_slope_a_threshold:
+    if count >= 6 and slope_abs < slope_a:
         return GradeScore.A
 
     # B: 基本达标

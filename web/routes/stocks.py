@@ -1,19 +1,50 @@
 """股票管理 API"""
 import json
+import uuid
+import threading
 from pathlib import Path
+from datetime import datetime
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import FileResponse
+from typing import Optional
 
 from web.database import get_db
-from web.models import StockListItem, StockDetail
+from web.models import StockListItem, StockDetail, StockImport, StockUpdate, BatchUpdate, ImportResult, AnalysisProgress
+from web.config import DB_PATH, CHARTS_DIR
+from web.services.analysis import analyze_stocks_sync, analyze_stock as analyze_single, get_progress, is_running
 
 router = APIRouter(prefix="/api/stocks", tags=["stocks"])
 
 
 @router.get("", response_model=list[StockListItem])
-def list_stocks(batch_id: str = Query(...)):
+def list_stocks(
+    tag: Optional[str] = Query(None),
+    label_status: Optional[str] = Query(None),
+    market: Optional[str] = Query(None),
+    status: Optional[str] = Query(None),
+):
     with get_db() as conn:
-        rows = conn.execute("""
+        conditions = []
+        params = []
+
+        if tag:
+            conditions.append(
+                "s.id IN (SELECT st.stock_id FROM stock_tags st JOIN tags t ON t.id=st.tag_id WHERE t.name=?)"
+            )
+            params.append(tag)
+        if market:
+            conditions.append("s.market = ?")
+            params.append(market)
+        if status:
+            conditions.append("s.status = ?")
+            params.append(status)
+
+        where = ""
+        if conditions:
+            where = "WHERE " + " AND ".join(conditions)
+
+        # label_status 需要在 HAVING 或者后过滤
+        query = f"""
             SELECT s.id, s.symbol, s.symbol_name, s.market, s.end_date, s.status,
                    COALESCE(s.dl_grade, l.dl_grade) as dl_grade,
                    COALESCE(s.pt_grade, l.pt_grade) as pt_grade,
@@ -27,11 +58,199 @@ def list_stocks(batch_id: str = Query(...)):
                    CASE WHEN l.id IS NOT NULL THEN 'labeled' ELSE 'unlabeled' END as label_status
             FROM stocks s
             LEFT JOIN labels l ON l.stock_id = s.id
-            WHERE s.batch_id = ?
-            ORDER BY s.created_at
-        """, (batch_id,)).fetchall()
+            {where}
+            ORDER BY s.created_at DESC
+        """
+        rows = conn.execute(query, params).fetchall()
 
-    return [_row_to_list_item(r) for r in rows]
+        # label_status 后过滤
+        if label_status:
+            rows = [r for r in rows if r['label_status'] == label_status]
+
+        # 获取每只股票的 tags
+        stock_ids = [r['id'] for r in rows]
+        stock_tags_map = _get_stock_tags_map(conn, stock_ids)
+
+    return [_row_to_list_item(r, stock_tags_map.get(r['id'], [])) for r in rows]
+
+
+@router.get("/progress", response_model=AnalysisProgress)
+def get_analysis_progress():
+    p = get_progress()
+    return AnalysisProgress(**p)
+
+
+@router.post("/import", response_model=ImportResult)
+def import_stocks(req: StockImport):
+    symbols = [s.strip() for s in req.symbols if s.strip()]
+    if not symbols:
+        raise HTTPException(400, "股票列表不能为空")
+
+    now = datetime.now().isoformat()
+    imported = 0
+    skipped = 0
+    new_stock_ids = []
+
+    with get_db() as conn:
+        # 确保 tags 存在
+        tag_ids = []
+        if req.tags:
+            for tag_name in req.tags:
+                tag_name = tag_name.strip()
+                if not tag_name:
+                    continue
+                row = conn.execute("SELECT id FROM tags WHERE name=?", (tag_name,)).fetchone()
+                if row:
+                    tag_ids.append(row['id'])
+                else:
+                    tag_id = str(uuid.uuid4())
+                    conn.execute(
+                        "INSERT INTO tags (id, name, created_at) VALUES (?,?,?)",
+                        (tag_id, tag_name, now)
+                    )
+                    tag_ids.append(tag_id)
+
+        for sym in symbols:
+            existing = conn.execute("SELECT id FROM stocks WHERE symbol=?", (sym,)).fetchone()
+            if existing:
+                skipped += 1
+                stock_id = existing['id']
+            else:
+                stock_id = str(uuid.uuid4())
+                conn.execute(
+                    "INSERT INTO stocks (id, symbol, end_date, created_at) VALUES (?,?,?,?)",
+                    (stock_id, sym, req.end_date, now)
+                )
+                imported += 1
+                new_stock_ids.append(stock_id)
+
+            # 关联 tags
+            for tid in tag_ids:
+                existing_link = conn.execute(
+                    "SELECT 1 FROM stock_tags WHERE stock_id=? AND tag_id=?",
+                    (stock_id, tid)
+                ).fetchone()
+                if not existing_link:
+                    conn.execute(
+                        "INSERT INTO stock_tags (stock_id, tag_id) VALUES (?,?)",
+                        (stock_id, tid)
+                    )
+
+    return ImportResult(imported=imported, skipped=skipped, stock_ids=new_stock_ids)
+
+
+@router.post("/analyze")
+def trigger_batch_analyze(req: dict = None):
+    if is_running():
+        raise HTTPException(400, "分析正在进行中，请等待完成")
+
+    with get_db() as conn:
+        stock_ids = []
+        if req and req.get('stock_ids'):
+            stock_ids = req['stock_ids']
+        elif req and req.get('tag'):
+            rows = conn.execute("""
+                SELECT st.stock_id FROM stock_tags st
+                JOIN tags t ON t.id = st.tag_id
+                WHERE t.name = ?
+            """, (req['tag'],)).fetchall()
+            stock_ids = [r['stock_id'] for r in rows]
+        else:
+            raise HTTPException(400, "请指定 stock_ids 或 tag")
+
+        if not stock_ids:
+            raise HTTPException(400, "没有找到待分析的股票")
+
+    t = threading.Thread(
+        target=analyze_stocks_sync,
+        args=(stock_ids, str(DB_PATH), str(CHARTS_DIR)),
+        daemon=True
+    )
+    t.start()
+
+    return {"message": f"分析已启动，共 {len(stock_ids)} 只股票"}
+
+
+@router.post("/{stock_id}/analyze")
+def trigger_single_analyze(stock_id: str):
+    if is_running():
+        raise HTTPException(400, "分析正在进行中，请等待完成")
+
+    with get_db() as conn:
+        row = conn.execute("SELECT id FROM stocks WHERE id=?", (stock_id,)).fetchone()
+        if not row:
+            raise HTTPException(404, "股票不存在")
+
+    t = threading.Thread(
+        target=analyze_stocks_sync,
+        args=([stock_id], str(DB_PATH), str(CHARTS_DIR)),
+        daemon=True
+    )
+    t.start()
+
+    return {"message": "分析已启动"}
+
+
+@router.post("/batch-update")
+def batch_update_stocks(req: BatchUpdate):
+    if not req.stock_ids:
+        raise HTTPException(400, "stock_ids 不能为空")
+
+    with get_db() as conn:
+        # 验证所有 stock_id 存在
+        placeholders = ','.join('?' * len(req.stock_ids))
+        existing = conn.execute(
+            f"SELECT id FROM stocks WHERE id IN ({placeholders})", req.stock_ids
+        ).fetchall()
+        existing_ids = {r['id'] for r in existing}
+        missing = [sid for sid in req.stock_ids if sid not in existing_ids]
+        if missing:
+            raise HTTPException(404, f"股票不存在: {', '.join(missing[:3])}")
+
+        now = datetime.now().isoformat()
+
+        # 批量更新 end_date
+        if req.end_date is not None:
+            conn.execute(
+                f"UPDATE stocks SET end_date=? WHERE id IN ({placeholders})",
+                [req.end_date] + req.stock_ids
+            )
+
+        # 批量更新 tags
+        if req.tags is not None:
+            # 确保 tags 存在
+            tag_ids = []
+            for tag_name in req.tags:
+                tag_name = tag_name.strip()
+                if not tag_name:
+                    continue
+                tag_row = conn.execute("SELECT id FROM tags WHERE name=?", (tag_name,)).fetchone()
+                if tag_row:
+                    tag_ids.append(tag_row['id'])
+                else:
+                    tag_id = str(uuid.uuid4())
+                    conn.execute(
+                        "INSERT INTO tags (id, name, created_at) VALUES (?,?,?)",
+                        (tag_id, tag_name, now)
+                    )
+                    tag_ids.append(tag_id)
+
+            for stock_id in req.stock_ids:
+                if req.tag_mode == "replace":
+                    conn.execute("DELETE FROM stock_tags WHERE stock_id=?", (stock_id,))
+
+                for tid in tag_ids:
+                    existing_link = conn.execute(
+                        "SELECT 1 FROM stock_tags WHERE stock_id=? AND tag_id=?",
+                        (stock_id, tid)
+                    ).fetchone()
+                    if not existing_link:
+                        conn.execute(
+                            "INSERT INTO stock_tags (stock_id, tag_id) VALUES (?,?)",
+                            (stock_id, tid)
+                        )
+
+    return {"message": f"已更新 {len(req.stock_ids)} 只股票"}
 
 
 @router.get("/{stock_id}", response_model=StockDetail)
@@ -44,6 +263,14 @@ def get_stock(stock_id: str):
         label_row = conn.execute(
             "SELECT * FROM labels WHERE stock_id=?", (stock_id,)
         ).fetchone()
+
+        # 获取 tags
+        tag_rows = conn.execute("""
+            SELECT t.name FROM tags t
+            JOIN stock_tags st ON st.tag_id = t.id
+            WHERE st.stock_id = ?
+        """, (stock_id,)).fetchall()
+        tags = [t['name'] for t in tag_rows]
 
     score_card = None
     if row['score_card_json']:
@@ -90,7 +317,55 @@ def get_stock(stock_id: str):
         position_size=row['position_size'],
         label=label,
         analyzed_at=row['analyzed_at'],
+        tags=tags,
     )
+
+
+@router.put("/{stock_id}")
+def update_stock(stock_id: str, req: StockUpdate):
+    with get_db() as conn:
+        row = conn.execute("SELECT id FROM stocks WHERE id=?", (stock_id,)).fetchone()
+        if not row:
+            raise HTTPException(404, "股票不存在")
+
+        if req.end_date is not None:
+            conn.execute("UPDATE stocks SET end_date=? WHERE id=?", (req.end_date, stock_id))
+
+        if req.tags is not None:
+            # 替换式更新 tags
+            conn.execute("DELETE FROM stock_tags WHERE stock_id=?", (stock_id,))
+            now = datetime.now().isoformat()
+            for tag_name in req.tags:
+                tag_name = tag_name.strip()
+                if not tag_name:
+                    continue
+                tag_row = conn.execute("SELECT id FROM tags WHERE name=?", (tag_name,)).fetchone()
+                if tag_row:
+                    tag_id = tag_row['id']
+                else:
+                    tag_id = str(uuid.uuid4())
+                    conn.execute(
+                        "INSERT INTO tags (id, name, created_at) VALUES (?,?,?)",
+                        (tag_id, tag_name, now)
+                    )
+                conn.execute(
+                    "INSERT INTO stock_tags (stock_id, tag_id) VALUES (?,?)",
+                    (stock_id, tag_id)
+                )
+
+    return {"message": "已更新"}
+
+
+@router.delete("/{stock_id}")
+def delete_stock(stock_id: str):
+    with get_db() as conn:
+        row = conn.execute("SELECT id FROM stocks WHERE id=?", (stock_id,)).fetchone()
+        if not row:
+            raise HTTPException(404, "股票不存在")
+        conn.execute("DELETE FROM labels WHERE stock_id=?", (stock_id,))
+        conn.execute("DELETE FROM stock_tags WHERE stock_id=?", (stock_id,))
+        conn.execute("DELETE FROM stocks WHERE id=?", (stock_id,))
+    return {"message": "已删除"}
 
 
 @router.get("/{stock_id}/chart")
@@ -109,7 +384,25 @@ def get_chart(stock_id: str):
     return FileResponse(str(chart_path), media_type="image/png")
 
 
-def _row_to_list_item(row) -> StockListItem:
+def _get_stock_tags_map(conn, stock_ids: list) -> dict:
+    """批量获取股票的 tags，返回 {stock_id: [tag_name, ...]}"""
+    if not stock_ids:
+        return {}
+    placeholders = ','.join('?' * len(stock_ids))
+    rows = conn.execute(f"""
+        SELECT st.stock_id, t.name
+        FROM stock_tags st
+        JOIN tags t ON t.id = st.tag_id
+        WHERE st.stock_id IN ({placeholders})
+    """, stock_ids).fetchall()
+
+    result = {}
+    for r in rows:
+        result.setdefault(r['stock_id'], []).append(r['name'])
+    return result
+
+
+def _row_to_list_item(row, tags: list) -> StockListItem:
     return StockListItem(
         id=row['id'],
         symbol=row['symbol'],
@@ -127,4 +420,5 @@ def _row_to_list_item(row) -> StockListItem:
         position_size=row['position_size'],
         label_status=row['label_status'],
         analyzed_at=row['analyzed_at'],
+        tags=tags,
     )

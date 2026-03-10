@@ -3,10 +3,11 @@ import uuid
 from datetime import datetime
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import PlainTextResponse
+from typing import Optional
 
 from web.database import get_db
 from web.models import LabelUpsert
-from web.services.export import export_batch_csv
+from web.services.export import export_csv, sync_labels_to_csv
 
 router = APIRouter(prefix="/api", tags=["labels"])
 
@@ -17,7 +18,7 @@ def upsert_label(stock_id: str, req: LabelUpsert):
 
     with get_db() as conn:
         # 确认股票存在
-        stock = conn.execute("SELECT id, batch_id FROM stocks WHERE id=?", (stock_id,)).fetchone()
+        stock = conn.execute("SELECT id FROM stocks WHERE id=?", (stock_id,)).fetchone()
         if not stock:
             raise HTTPException(404, "股票不存在")
 
@@ -72,16 +73,9 @@ def upsert_label(stock_id: str, req: LabelUpsert):
                 now, now,
             ))
 
-        # 更新批次的 labeled_count
-        batch_id = stock['batch_id']
-        count = conn.execute(
-            "SELECT COUNT(*) as c FROM labels WHERE stock_id IN (SELECT id FROM stocks WHERE batch_id=?)",
-            (batch_id,)
-        ).fetchone()['c']
-        conn.execute(
-            "UPDATE batches SET labeled_count=? WHERE id=?",
-            (count, batch_id)
-        )
+    # 同步写入 labeled_cases.csv
+    with get_db() as conn:
+        sync_labels_to_csv(conn)
 
     return {"message": "标注已保存"}
 
@@ -104,15 +98,21 @@ def get_label(stock_id: str):
 
 
 @router.get("/export")
-def export_csv(batch_id: str = Query(...)):
+def export(tag_id: Optional[str] = Query(None)):
+    from urllib.parse import quote
     with get_db() as conn:
-        batch = conn.execute("SELECT * FROM batches WHERE id=?", (batch_id,)).fetchone()
-        if not batch:
-            raise HTTPException(404, "批次不存在")
-        csv_content = export_batch_csv(conn, batch_id)
+        filename = "labels_all.csv"
+        if tag_id:
+            tag = conn.execute("SELECT name FROM tags WHERE id=?", (tag_id,)).fetchone()
+            if not tag:
+                raise HTTPException(404, "标签不存在")
+            filename = f"labels_{tag['name']}.csv"
+        csv_content = export_csv(conn, tag_id)
 
+    # RFC 5987: 用 filename* 支持非 ASCII 文件名
+    encoded = quote(filename, safe='')
     return PlainTextResponse(
         content=csv_content,
         media_type="text/csv",
-        headers={"Content-Disposition": f"attachment; filename=labels_{batch['name']}.csv"}
+        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{encoded}"}
     )

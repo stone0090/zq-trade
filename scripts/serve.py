@@ -31,7 +31,7 @@ def main():
 
 
 def _import_labeled_cases():
-    """首次运行时导入 labeled_cases.csv"""
+    """首次运行时导入 labeled_cases.csv，使用标签 '历史导入' 代替批次"""
     import csv
     import uuid
     from datetime import datetime
@@ -42,9 +42,9 @@ def _import_labeled_cases():
         return
 
     with get_db() as conn:
-        # 检查是否已导入
+        # 检查是否已导入（通过标签判断）
         existing = conn.execute(
-            "SELECT id FROM batches WHERE name='CSV导入(历史标注)'"
+            "SELECT id FROM tags WHERE name='历史导入'"
         ).fetchone()
         if existing:
             return
@@ -58,18 +58,36 @@ def _import_labeled_cases():
         if not cases:
             return
 
-        batch_id = str(uuid.uuid4())
         now = datetime.now().isoformat()
 
+        # 创建 "历史导入" 标签
+        tag_id = str(uuid.uuid4())
         conn.execute(
-            "INSERT INTO batches (id, name, created_at, status, total_count, completed_count, labeled_count) VALUES (?,?,?,?,?,?,?)",
-            (batch_id, 'CSV导入(历史标注)', now, 'completed', len(cases), len(cases), len(cases))
+            "INSERT INTO tags (id, name, created_at) VALUES (?,?,?)",
+            (tag_id, '历史导入', now)
         )
 
+        imported = 0
         for case in cases:
+            symbol = case.get('symbol', '')
+            if not symbol:
+                continue
+
+            # 检查 symbol 是否已存在
+            existing_stock = conn.execute(
+                "SELECT id FROM stocks WHERE symbol=?", (symbol,)
+            ).fetchone()
+            if existing_stock:
+                # 已存在则跳过，但关联标签
+                stock_id = existing_stock['id']
+                conn.execute(
+                    "INSERT OR IGNORE INTO stock_tags (stock_id, tag_id) VALUES (?,?)",
+                    (stock_id, tag_id)
+                )
+                continue
+
             stock_id = str(uuid.uuid4())
             label_id = str(uuid.uuid4())
-            symbol = case.get('symbol', '')
             end_date = case.get('end_date', '')
 
             # SF 值映射
@@ -86,12 +104,12 @@ def _import_labeled_cases():
                 market = 'us'
 
             conn.execute("""
-                INSERT INTO stocks (id, batch_id, symbol, market, end_date, status,
+                INSERT INTO stocks (id, symbol, market, end_date, status,
                     dl_grade, pt_grade, lk_grade, sf_grade, ty_grade, dn_grade,
                     conclusion, position_size,
                     created_at, analyzed_at)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-            """, (stock_id, batch_id, symbol, market, end_date, 'completed',
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            """, (stock_id, symbol, market, end_date, 'completed',
                   case.get('DL', '') or None,
                   case.get('PT', '') or None,
                   case.get('LK', '') or None,
@@ -122,7 +140,14 @@ def _import_labeled_cases():
                 now, now,
             ))
 
-        print(f"  已导入 {len(cases)} 条标注记录")
+            # 关联标签
+            conn.execute(
+                "INSERT INTO stock_tags (stock_id, tag_id) VALUES (?,?)",
+                (stock_id, tag_id)
+            )
+            imported += 1
+
+        print(f"  已导入 {imported} 条标注记录")
 
 
 if __name__ == '__main__':

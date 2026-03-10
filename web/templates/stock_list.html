@@ -1,16 +1,26 @@
 {% extends "base.html" %}
-{% block title %}{{ batch.name }} - ZQ-Trade{% endblock %}
+{% block title %}ZQ-Trade 六维分析标注系统{% endblock %}
 
 {% block content %}
-<div class="flex items-center justify-between mb-6">
-  <div class="flex items-center gap-4">
-    <a href="/" class="text-gray-400 hover:text-gray-600">&larr; 返回</a>
-    <h1 class="text-2xl font-bold text-gray-800">{{ batch.name }}</h1>
-    <span id="label-progress" class="text-sm text-gray-500"></span>
+<!-- 顶栏 -->
+<div class="flex items-center justify-between mb-4">
+  <h1 class="text-2xl font-bold text-gray-800">股票列表</h1>
+  <div class="flex items-center gap-2">
+    <button class="btn btn-ghost btn-sm" onclick="openTagModal()">管理标签</button>
+    <button class="btn btn-primary" onclick="openImportModal()">+ 导入股票</button>
   </div>
+</div>
+
+<!-- 标签筛选 chips -->
+<div id="tag-chips" class="flex flex-wrap gap-2 mb-4">
+  <span class="tag tag-S cursor-pointer" onclick="filterByTag('')">全部</span>
+</div>
+
+<!-- 筛选栏 + 统计 -->
+<div class="flex items-center justify-between mb-4">
   <div class="flex items-center gap-3">
     <select id="filter-label" onchange="applyFilter()" class="text-sm">
-      <option value="">全部</option>
+      <option value="">全部标注</option>
       <option value="unlabeled">未标注</option>
       <option value="labeled">已标注</option>
     </select>
@@ -20,17 +30,51 @@
       <option value="hk">港股</option>
       <option value="us">美股</option>
     </select>
-    <a href="/api/export?batch_id={{ batch.id }}" class="btn btn-ghost btn-sm" download>导出CSV</a>
+    <span id="stock-count" class="text-sm text-gray-500"></span>
+  </div>
+  <div class="flex items-center gap-2">
+    <a id="export-link" href="/api/export" class="btn btn-ghost btn-sm" download>导出CSV</a>
   </div>
 </div>
 
+<!-- 批量操作栏 -->
+<div id="batch-bar" class="mb-4 p-3 bg-blue-50 border border-blue-200 rounded-lg hidden">
+  <div class="flex items-center justify-between">
+    <div class="flex items-center gap-3">
+      <span class="text-sm text-blue-700">已选择 <b id="batch-count">0</b> 只股票</span>
+      <button class="btn btn-ghost btn-sm" onclick="openBatchTagModal()">修改标签</button>
+      <button class="btn btn-ghost btn-sm" onclick="batchEditDate()">修改日期</button>
+      <button class="btn btn-ghost btn-sm" onclick="batchReanalyze()">重新分析</button>
+    </div>
+    <div class="flex items-center gap-2">
+      <button class="btn btn-ghost btn-sm" onclick="selectAll()">全选</button>
+      <button class="btn btn-ghost btn-sm" onclick="clearSelection()">取消选择</button>
+    </div>
+  </div>
+</div>
+
+<!-- 分析进度条 -->
+<div id="progress-bar" class="mb-4 hidden">
+  <div class="flex items-center gap-3 text-sm text-blue-600 mb-1">
+    <span>分析中...</span>
+    <span id="progress-text"></span>
+  </div>
+  <div class="bg-gray-200 rounded-full h-2">
+    <div id="progress-fill" class="bg-blue-500 h-2 rounded-full transition-all" style="width:0%"></div>
+  </div>
+</div>
+
+<!-- 股票表格 -->
 <div class="bg-white rounded-lg shadow-sm border overflow-x-auto">
   <table class="w-full text-sm">
     <thead class="bg-gray-50 border-b">
       <tr>
+        <th class="px-2 py-3 text-center w-8"><input type="checkbox" id="check-all" onchange="toggleAll(this.checked)"></th>
         <th class="px-4 py-3 text-left font-medium text-gray-500">代码</th>
         <th class="px-4 py-3 text-left font-medium text-gray-500">名称</th>
         <th class="px-3 py-3 text-center font-medium text-gray-500">市场</th>
+        <th class="px-3 py-3 text-left font-medium text-gray-500">标签</th>
+        <th class="px-3 py-3 text-center font-medium text-gray-500">截止日期</th>
         <th class="px-3 py-3 text-center font-medium text-gray-500">DL</th>
         <th class="px-3 py-3 text-center font-medium text-gray-500">PT</th>
         <th class="px-3 py-3 text-center font-medium text-gray-500">LK</th>
@@ -38,22 +82,170 @@
         <th class="px-3 py-3 text-center font-medium text-gray-500">TY</th>
         <th class="px-3 py-3 text-center font-medium text-gray-500">DN</th>
         <th class="px-3 py-3 text-center font-medium text-gray-500">仓位</th>
-        <th class="px-4 py-3 text-left font-medium text-gray-500">结论</th>
         <th class="px-3 py-3 text-center font-medium text-gray-500">标注</th>
         <th class="px-3 py-3 text-center font-medium text-gray-500">状态</th>
       </tr>
     </thead>
     <tbody id="stock-tbody">
-      <tr><td colspan="13" class="text-center py-8 text-gray-400">加载中...</td></tr>
+      <tr><td colspan="16" class="text-center py-8 text-gray-400">加载中...</td></tr>
     </tbody>
   </table>
+</div>
+
+<!-- 导入弹窗 -->
+<div id="import-modal" class="fixed inset-0 bg-black bg-opacity-40 hidden items-center justify-center z-50" style="display:none">
+  <div class="bg-white rounded-xl shadow-xl p-6 w-full max-w-lg mx-4">
+    <h2 class="text-lg font-bold mb-4">导入股票</h2>
+    <div class="mb-4">
+      <label class="block text-sm font-medium text-gray-600 mb-1">股票代码（每行一个，或用逗号/空格分隔）</label>
+      <textarea id="import-symbols" rows="6" class="w-full font-mono" placeholder="603817&#10;600802&#10;02610&#10;HIMS"></textarea>
+    </div>
+    <div class="mb-4">
+      <label class="block text-sm font-medium text-gray-600 mb-1">截止日期（可选，默认今天）</label>
+      <input type="text" id="import-end-date" class="w-full" placeholder="YYYY-MM-DD">
+    </div>
+    <div class="mb-4">
+      <label class="block text-sm font-medium text-gray-600 mb-1">标签（可选，用逗号分隔，不存在的自动创建）</label>
+      <input type="text" id="import-tags" class="w-full" placeholder="如：3月扫描, 强势股">
+    </div>
+    <div class="flex justify-end gap-3">
+      <button class="btn btn-ghost" onclick="closeImportModal()">取消</button>
+      <button class="btn btn-primary" id="btn-import" onclick="doImport(false)">仅导入</button>
+      <button class="btn btn-success" id="btn-import-analyze" onclick="doImport(true)">导入并分析</button>
+    </div>
+  </div>
+</div>
+
+<!-- 标签管理弹窗 -->
+<div id="tag-modal" class="fixed inset-0 bg-black bg-opacity-40 hidden items-center justify-center z-50" style="display:none">
+  <div class="bg-white rounded-xl shadow-xl p-6 w-full max-w-lg mx-4">
+    <h2 class="text-lg font-bold mb-4">标签管理</h2>
+    <div class="mb-4">
+      <div class="flex gap-2 mb-3">
+        <input type="text" id="new-tag-name" class="flex-1" placeholder="新标签名称">
+        <button class="btn btn-primary btn-sm" onclick="createTag()">创建</button>
+      </div>
+      <div id="tag-list" class="space-y-2 max-h-64 overflow-y-auto"></div>
+    </div>
+    <div class="flex justify-end">
+      <button class="btn btn-ghost" onclick="closeTagModal()">关闭</button>
+    </div>
+  </div>
+</div>
+
+<!-- 批量修改标签弹窗 -->
+<div id="batch-tag-modal" class="fixed inset-0 bg-black bg-opacity-40 hidden items-center justify-center z-50" style="display:none">
+  <div class="bg-white rounded-xl shadow-xl p-6 w-full max-w-lg mx-4">
+    <h2 class="text-lg font-bold mb-4">批量修改标签</h2>
+    <div class="mb-4">
+      <label class="block text-sm font-medium text-gray-600 mb-1">选择标签（可多选，不存在的自动创建）</label>
+      <div id="batch-tag-options" class="flex flex-wrap gap-2 mb-3 min-h-[36px] p-2 border rounded-lg bg-gray-50"></div>
+      <div class="flex gap-2">
+        <input type="text" id="batch-new-tag" class="flex-1" placeholder="输入新标签名，回车添加" onkeydown="if(event.key==='Enter'){event.preventDefault();addBatchTag();}">
+        <button class="btn btn-ghost btn-sm" onclick="addBatchTag()">添加</button>
+      </div>
+    </div>
+    <div class="mb-4">
+      <label class="block text-sm font-medium text-gray-600 mb-2">模式</label>
+      <div class="flex gap-4">
+        <label class="flex items-center gap-2 text-sm">
+          <input type="radio" name="batch-tag-mode" value="replace" checked> 替换（清除原有标签）
+        </label>
+        <label class="flex items-center gap-2 text-sm">
+          <input type="radio" name="batch-tag-mode" value="add"> 追加（保留原有标签）
+        </label>
+      </div>
+    </div>
+    <div class="flex justify-end gap-3">
+      <button class="btn btn-ghost" onclick="closeBatchTagModal()">取消</button>
+      <button class="btn btn-primary" onclick="doBatchTagUpdate()">确认修改</button>
+    </div>
+  </div>
 </div>
 {% endblock %}
 
 {% block scripts %}
 <script>
-const BATCH_ID = '{{ batch.id }}';
 let allStocks = [];
+let allTags = [];
+let currentTag = '';  // 当前选中的 tag name
+let selectedIds = new Set();  // 批量选中的 stock id
+
+// ─── 初始化 ───
+async function init() {
+  // 恢复筛选状态
+  const saved = sessionStorage.getItem('stockFilter');
+  if (saved) {
+    try {
+      const f = JSON.parse(saved);
+      if (f.tag) currentTag = f.tag;
+      if (f.label_status) document.getElementById('filter-label').value = f.label_status;
+      if (f.market) document.getElementById('filter-market').value = f.market;
+    } catch(e) {}
+  }
+  await Promise.all([loadTags(), loadStocks()]);
+  pollProgress();
+}
+
+// ─── 标签 ───
+async function loadTags() {
+  try {
+    allTags = await api('/api/tags');
+    renderTagChips();
+  } catch(e) {}
+}
+
+function renderTagChips() {
+  const c = document.getElementById('tag-chips');
+  let html = '<span class="tag cursor-pointer ' + (!currentTag ? 'tag-S' : 'bg-gray-100 text-gray-600') +
+    '" onclick="filterByTag(\'\')">全部</span>';
+  allTags.forEach(t => {
+    const active = currentTag === t.name;
+    html += '<span class="tag cursor-pointer ' + (active ? 'tag-S' : 'bg-gray-100 text-gray-600') +
+      '" onclick="filterByTag(\'' + t.name.replace(/'/g, "\\'") + '\')">' +
+      t.name + ' <span class="text-xs opacity-60">(' + t.stock_count + ')</span></span>';
+  });
+  c.innerHTML = html;
+}
+
+function filterByTag(name) {
+  currentTag = name;
+  renderTagChips();
+  loadStocks();
+  saveFilter();
+}
+
+// ─── 股票列表 ───
+async function loadStocks() {
+  try {
+    let url = '/api/stocks';
+    const params = [];
+    if (currentTag) params.push('tag=' + encodeURIComponent(currentTag));
+    const fl = document.getElementById('filter-label').value;
+    if (fl) params.push('label_status=' + fl);
+    const fm = document.getElementById('filter-market').value;
+    if (fm) params.push('market=' + fm);
+    if (params.length) url += '?' + params.join('&');
+
+    allStocks = await api(url);
+    renderStocks(allStocks);
+
+    // 更新导出链接
+    const exportParams = [];
+    const activeTag = allTags.find(t => t.name === currentTag);
+    if (activeTag) exportParams.push('tag_id=' + activeTag.id);
+    document.getElementById('export-link').href = '/api/export' +
+      (exportParams.length ? '?' + exportParams.join('&') : '');
+
+    // 如果有未完成的，轮询
+    if (allStocks.some(s => s.status === 'pending' || s.status === 'analyzing')) {
+      setTimeout(loadStocks, 3000);
+    }
+  } catch(e) {
+    document.getElementById('stock-tbody').innerHTML =
+      '<tr><td colspan="16" class="text-center py-8 text-red-500">加载失败: ' + e.message + '</td></tr>';
+  }
+}
 
 function positionTag(pos) {
   if (!pos) return '<span class="tag tag-none">-</span>';
@@ -69,61 +261,369 @@ function statusBadge(s) {
 function renderStocks(stocks) {
   const tbody = document.getElementById('stock-tbody');
   if (stocks.length === 0) {
-    tbody.innerHTML = '<tr><td colspan="13" class="text-center py-8 text-gray-400">无匹配数据</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="16" class="text-center py-8 text-gray-400">无匹配数据</td></tr>';
+    document.getElementById('stock-count').textContent = '';
     return;
   }
+
+  const labeled = stocks.filter(s => s.label_status === 'labeled').length;
+  document.getElementById('stock-count').textContent =
+    '共 ' + stocks.length + ' 只 | 已标注 ' + labeled + '/' + stocks.length;
 
   tbody.innerHTML = stocks.map(s => {
     const labelIcon = s.label_status === 'labeled' ? '✅' : '⬜';
     const rowBg = s.status === 'error' ? ' bg-red-50' : '';
-    return '<tr class="border-b hover:bg-blue-50 cursor-pointer' + rowBg + '" onclick="goDetail(\'' + s.id + '\')">' +
-      '<td class="px-4 py-3 font-mono font-semibold">' + s.symbol + '</td>' +
-      '<td class="px-4 py-3 text-gray-600">' + (s.symbol_name || '') + '</td>' +
-      '<td class="px-3 py-3 text-center">' + marketTag(s.market) + '</td>' +
-      '<td class="px-3 py-3 text-center">' + gradeTag(s.dl_grade) + '</td>' +
-      '<td class="px-3 py-3 text-center">' + gradeTag(s.pt_grade) + '</td>' +
-      '<td class="px-3 py-3 text-center">' + gradeTag(s.lk_grade) + '</td>' +
-      '<td class="px-3 py-3 text-center">' + gradeTag(s.sf_grade) + '</td>' +
-      '<td class="px-3 py-3 text-center">' + gradeTag(s.ty_grade) + '</td>' +
-      '<td class="px-3 py-3 text-center">' + gradeTag(s.dn_grade) + '</td>' +
-      '<td class="px-3 py-3 text-center">' + positionTag(s.position_size) + '</td>' +
-      '<td class="px-4 py-3 text-xs text-gray-500 max-w-xs truncate">' + (s.conclusion || '') + '</td>' +
-      '<td class="px-3 py-3 text-center">' + labelIcon + '</td>' +
-      '<td class="px-3 py-3 text-center">' + statusBadge(s.status) + '</td>' +
+    const checked = selectedIds.has(s.id) ? ' checked' : '';
+    const tagsHtml = (s.tags || []).map(t =>
+      '<span class="inline-block bg-gray-100 text-gray-600 text-xs px-1.5 py-0.5 rounded mr-1">' + t + '</span>'
+    ).join('');
+
+    return '<tr class="border-b hover:bg-blue-50 cursor-pointer' + rowBg + '">' +
+      '<td class="px-2 py-3 text-center" onclick="event.stopPropagation()"><input type="checkbox" data-id="' + s.id + '"' + checked + ' onchange="toggleSelect(\'' + s.id + '\', this.checked)"></td>' +
+      '<td class="px-4 py-3 font-mono font-semibold" onclick="goDetail(\'' + s.id + '\')">' + s.symbol + '</td>' +
+      '<td class="px-4 py-3 text-gray-600" onclick="goDetail(\'' + s.id + '\')">' + (s.symbol_name || '') + '</td>' +
+      '<td class="px-3 py-3 text-center" onclick="goDetail(\'' + s.id + '\')">' + marketTag(s.market) + '</td>' +
+      '<td class="px-3 py-3" onclick="goDetail(\'' + s.id + '\')">' + tagsHtml + '</td>' +
+      '<td class="px-3 py-3 text-center text-xs text-gray-500" onclick="goDetail(\'' + s.id + '\')">' + (s.end_date || '') + '</td>' +
+      '<td class="px-3 py-3 text-center" onclick="goDetail(\'' + s.id + '\')">' + gradeTag(s.dl_grade) + '</td>' +
+      '<td class="px-3 py-3 text-center" onclick="goDetail(\'' + s.id + '\')">' + gradeTag(s.pt_grade) + '</td>' +
+      '<td class="px-3 py-3 text-center" onclick="goDetail(\'' + s.id + '\')">' + gradeTag(s.lk_grade) + '</td>' +
+      '<td class="px-3 py-3 text-center" onclick="goDetail(\'' + s.id + '\')">' + gradeTag(s.sf_grade) + '</td>' +
+      '<td class="px-3 py-3 text-center" onclick="goDetail(\'' + s.id + '\')">' + gradeTag(s.ty_grade) + '</td>' +
+      '<td class="px-3 py-3 text-center" onclick="goDetail(\'' + s.id + '\')">' + gradeTag(s.dn_grade) + '</td>' +
+      '<td class="px-3 py-3 text-center" onclick="goDetail(\'' + s.id + '\')">' + positionTag(s.position_size) + '</td>' +
+      '<td class="px-3 py-3 text-center" onclick="goDetail(\'' + s.id + '\')">' + labelIcon + '</td>' +
+      '<td class="px-3 py-3 text-center" onclick="goDetail(\'' + s.id + '\')">' + statusBadge(s.status) + '</td>' +
     '</tr>';
   }).join('');
-
-  // 更新进度
-  const labeled = stocks.filter(s => s.label_status === 'labeled').length;
-  document.getElementById('label-progress').textContent = '已标注 ' + labeled + '/' + stocks.length;
+  updateBatchBar();
 }
 
 function applyFilter() {
-  const fl = document.getElementById('filter-label').value;
-  const fm = document.getElementById('filter-market').value;
-  let filtered = allStocks;
-  if (fl) filtered = filtered.filter(s => s.label_status === fl);
-  if (fm) filtered = filtered.filter(s => s.market === fm);
-  renderStocks(filtered);
+  saveFilter();
+  loadStocks();
+}
+
+function saveFilter() {
+  sessionStorage.setItem('stockFilter', JSON.stringify({
+    tag: currentTag,
+    label_status: document.getElementById('filter-label').value,
+    market: document.getElementById('filter-market').value,
+  }));
 }
 
 function goDetail(stockId) {
-  window.location.href = '/batches/' + BATCH_ID + '/stock/' + stockId;
+  saveFilter();
+  window.location.href = '/stocks/' + stockId;
 }
 
-async function loadStocks() {
+// ─── 分析进度轮询 ───
+async function pollProgress() {
   try {
-    allStocks = await api('/api/stocks?batch_id=' + BATCH_ID);
-    renderStocks(allStocks);
-    // 如果有未完成的，轮询
-    if (allStocks.some(s => s.status === 'pending' || s.status === 'analyzing')) {
-      setTimeout(loadStocks, 3000);
+    const p = await api('/api/stocks/progress');
+    const bar = document.getElementById('progress-bar');
+    if (p.running) {
+      bar.classList.remove('hidden');
+      const pct = p.total > 0 ? Math.round(p.completed / p.total * 100) : 0;
+      document.getElementById('progress-text').textContent =
+        p.completed + '/' + p.total + (p.current_symbol ? ' (' + p.current_symbol + ')' : '');
+      document.getElementById('progress-fill').style.width = pct + '%';
+      setTimeout(pollProgress, 2000);
+      // 同时刷新列表
+      loadStocks();
+    } else {
+      bar.classList.add('hidden');
     }
+  } catch(e) {}
+}
+
+// ─── 导入弹窗 ───
+function openImportModal() {
+  document.getElementById('import-modal').style.display = 'flex';
+}
+function closeImportModal() {
+  document.getElementById('import-modal').style.display = 'none';
+}
+
+async function doImport(analyze) {
+  const raw = document.getElementById('import-symbols').value.trim();
+  const endDate = document.getElementById('import-end-date').value.trim() || null;
+  const tagsRaw = document.getElementById('import-tags').value.trim();
+
+  const symbols = raw.split(/[\n,\s\/]+/).map(s => s.trim()).filter(s => s);
+  if (symbols.length === 0) { showToast('请输入股票代码', 'error'); return; }
+
+  const tags = tagsRaw ? tagsRaw.split(/[,，]/).map(s => s.trim()).filter(s => s) : null;
+
+  const btn1 = document.getElementById('btn-import');
+  const btn2 = document.getElementById('btn-import-analyze');
+  btn1.disabled = true; btn2.disabled = true;
+  btn2.textContent = analyze ? '导入中...' : '仅导入';
+
+  try {
+    const result = await api('/api/stocks/import', {
+      method: 'POST',
+      body: JSON.stringify({ symbols, end_date: endDate, tags })
+    });
+
+    let msg = '导入完成：新增 ' + result.imported + ' 只';
+    if (result.skipped > 0) msg += '，跳过 ' + result.skipped + ' 只（已存在）';
+    showToast(msg);
+
+    if (analyze && result.stock_ids.length > 0) {
+      await api('/api/stocks/analyze', {
+        method: 'POST',
+        body: JSON.stringify({ stock_ids: result.stock_ids })
+      });
+      showToast('分析已启动');
+      pollProgress();
+    }
+
+    closeImportModal();
+    document.getElementById('import-symbols').value = '';
+    document.getElementById('import-end-date').value = '';
+    document.getElementById('import-tags').value = '';
+    await Promise.all([loadTags(), loadStocks()]);
   } catch(e) {
-    document.getElementById('stock-tbody').innerHTML = '<tr><td colspan="13" class="text-center py-8 text-red-500">加载失败</td></tr>';
+    showToast(e.message, 'error');
+  } finally {
+    btn1.disabled = false; btn2.disabled = false;
+    btn2.textContent = '导入并分析';
   }
 }
 
-loadStocks();
+// ─── 标签管理弹窗 ───
+function openTagModal() {
+  document.getElementById('tag-modal').style.display = 'flex';
+  renderTagList();
+}
+function closeTagModal() {
+  document.getElementById('tag-modal').style.display = 'none';
+}
+
+function renderTagList() {
+  const c = document.getElementById('tag-list');
+  if (allTags.length === 0) {
+    c.innerHTML = '<div class="text-gray-400 text-sm">暂无标签</div>';
+    return;
+  }
+  c.innerHTML = allTags.map(t =>
+    '<div class="flex items-center justify-between p-2 bg-gray-50 rounded">' +
+      '<div class="flex items-center gap-2">' +
+        '<span class="font-medium">' + t.name + '</span>' +
+        '<span class="text-xs text-gray-400">' + t.stock_count + ' 只股票</span>' +
+      '</div>' +
+      '<div class="flex items-center gap-1">' +
+        '<button class="btn btn-ghost btn-sm text-xs" onclick="analyzeByTag(\'' + t.name.replace(/'/g, "\\'") + '\')">分析</button>' +
+        '<button class="btn btn-ghost btn-sm text-xs" onclick="renameTag(\'' + t.id + '\',\'' + t.name.replace(/'/g, "\\'") + '\')">重命名</button>' +
+        '<button class="btn btn-ghost btn-sm text-xs" style="color:#ef4444" onclick="deleteTag(\'' + t.id + '\')">删除</button>' +
+      '</div>' +
+    '</div>'
+  ).join('');
+}
+
+async function createTag() {
+  const name = document.getElementById('new-tag-name').value.trim();
+  if (!name) { showToast('请输入标签名', 'error'); return; }
+  try {
+    await api('/api/tags', { method: 'POST', body: JSON.stringify({ name }) });
+    document.getElementById('new-tag-name').value = '';
+    await loadTags();
+    renderTagList();
+    showToast('标签已创建');
+  } catch(e) { showToast(e.message, 'error'); }
+}
+
+async function renameTag(id, oldName) {
+  const name = prompt('重命名标签', oldName);
+  if (!name || name === oldName) return;
+  try {
+    await api('/api/tags/' + id, { method: 'PUT', body: JSON.stringify({ name }) });
+    await loadTags();
+    renderTagList();
+    showToast('已重命名');
+  } catch(e) { showToast(e.message, 'error'); }
+}
+
+async function deleteTag(id) {
+  if (!confirm('确定删除此标签？（不会删除股票）')) return;
+  try {
+    await api('/api/tags/' + id, { method: 'DELETE' });
+    await loadTags();
+    renderTagList();
+    if (currentTag && !allTags.find(t => t.name === currentTag)) {
+      currentTag = '';
+    }
+    loadStocks();
+    showToast('标签已删除');
+  } catch(e) { showToast(e.message, 'error'); }
+}
+
+async function analyzeByTag(tagName) {
+  try {
+    await api('/api/stocks/analyze', {
+      method: 'POST',
+      body: JSON.stringify({ tag: tagName })
+    });
+    showToast('按标签 "' + tagName + '" 分析已启动');
+    closeTagModal();
+    pollProgress();
+  } catch(e) { showToast(e.message, 'error'); }
+}
+
+// ─── 多选 & 批量操作 ───
+function toggleSelect(id, checked) {
+  if (checked) selectedIds.add(id);
+  else selectedIds.delete(id);
+  updateBatchBar();
+}
+
+function toggleAll(checked) {
+  if (checked) {
+    allStocks.forEach(s => selectedIds.add(s.id));
+  } else {
+    selectedIds.clear();
+  }
+  // 更新所有 checkbox
+  document.querySelectorAll('#stock-tbody input[type="checkbox"]').forEach(cb => {
+    cb.checked = checked;
+  });
+  updateBatchBar();
+}
+
+function selectAll() {
+  allStocks.forEach(s => selectedIds.add(s.id));
+  document.querySelectorAll('#stock-tbody input[type="checkbox"]').forEach(cb => cb.checked = true);
+  document.getElementById('check-all').checked = true;
+  updateBatchBar();
+}
+
+function clearSelection() {
+  selectedIds.clear();
+  document.querySelectorAll('#stock-tbody input[type="checkbox"]').forEach(cb => cb.checked = false);
+  document.getElementById('check-all').checked = false;
+  updateBatchBar();
+}
+
+function updateBatchBar() {
+  const bar = document.getElementById('batch-bar');
+  const count = selectedIds.size;
+  document.getElementById('batch-count').textContent = count;
+  if (count > 0) {
+    bar.classList.remove('hidden');
+  } else {
+    bar.classList.add('hidden');
+  }
+  // 更新 check-all 状态
+  const checkAll = document.getElementById('check-all');
+  if (checkAll) {
+    checkAll.checked = allStocks.length > 0 && selectedIds.size === allStocks.length;
+    checkAll.indeterminate = selectedIds.size > 0 && selectedIds.size < allStocks.length;
+  }
+}
+
+// 批量修改标签
+let batchSelectedTags = [];
+
+function openBatchTagModal() {
+  if (selectedIds.size === 0) { showToast('请先选择股票', 'error'); return; }
+  batchSelectedTags = [];
+  renderBatchTagOptions();
+  document.getElementById('batch-tag-modal').style.display = 'flex';
+}
+
+function closeBatchTagModal() {
+  document.getElementById('batch-tag-modal').style.display = 'none';
+}
+
+function renderBatchTagOptions() {
+  const c = document.getElementById('batch-tag-options');
+  // 显示已有标签作为可选 + 已选中的
+  const allNames = allTags.map(t => t.name);
+  // 合并自定义添加的
+  batchSelectedTags.forEach(t => { if (!allNames.includes(t)) allNames.push(t); });
+
+  if (allNames.length === 0) {
+    c.innerHTML = '<span class="text-gray-400 text-sm">暂无标签，请在下方输入</span>';
+    return;
+  }
+  c.innerHTML = allNames.map(name => {
+    const active = batchSelectedTags.includes(name);
+    const cls = active
+      ? 'inline-flex items-center gap-1 px-3 py-1 rounded-full text-xs font-medium cursor-pointer bg-blue-100 text-blue-700 border border-blue-300'
+      : 'inline-flex items-center gap-1 px-3 py-1 rounded-full text-xs font-medium cursor-pointer bg-gray-100 text-gray-600 border border-gray-200 hover:bg-gray-200';
+    return '<span class="' + cls + '" onclick="toggleBatchTag(\'' + name.replace(/'/g, "\\'") + '\')">' + name + '</span>';
+  }).join('');
+}
+
+function toggleBatchTag(name) {
+  const idx = batchSelectedTags.indexOf(name);
+  if (idx >= 0) batchSelectedTags.splice(idx, 1);
+  else batchSelectedTags.push(name);
+  renderBatchTagOptions();
+}
+
+function addBatchTag() {
+  const input = document.getElementById('batch-new-tag');
+  const name = input.value.trim();
+  if (!name) return;
+  if (!batchSelectedTags.includes(name)) {
+    batchSelectedTags.push(name);
+  }
+  input.value = '';
+  renderBatchTagOptions();
+}
+
+async function doBatchTagUpdate() {
+  const mode = document.querySelector('input[name="batch-tag-mode"]:checked').value;
+  try {
+    await api('/api/stocks/batch-update', {
+      method: 'POST',
+      body: JSON.stringify({
+        stock_ids: Array.from(selectedIds),
+        tags: batchSelectedTags,
+        tag_mode: mode
+      })
+    });
+    showToast('标签已批量更新');
+    closeBatchTagModal();
+    await Promise.all([loadTags(), loadStocks()]);
+  } catch(e) { showToast(e.message, 'error'); }
+}
+
+// 批量修改日期
+async function batchEditDate() {
+  if (selectedIds.size === 0) { showToast('请先选择股票', 'error'); return; }
+  const newDate = prompt('批量修改截止日期 (YYYY-MM-DD)');
+  if (newDate === null) return;
+  try {
+    await api('/api/stocks/batch-update', {
+      method: 'POST',
+      body: JSON.stringify({
+        stock_ids: Array.from(selectedIds),
+        end_date: newDate || null
+      })
+    });
+    showToast('日期已批量更新');
+    loadStocks();
+  } catch(e) { showToast(e.message, 'error'); }
+}
+
+// 批量重新分析
+async function batchReanalyze() {
+  if (selectedIds.size === 0) { showToast('请先选择股票', 'error'); return; }
+  if (!confirm('确定重新分析选中的 ' + selectedIds.size + ' 只股票？')) return;
+  try {
+    await api('/api/stocks/analyze', {
+      method: 'POST',
+      body: JSON.stringify({ stock_ids: Array.from(selectedIds) })
+    });
+    showToast('批量分析已启动');
+    clearSelection();
+    pollProgress();
+  } catch(e) { showToast(e.message, 'error'); }
+}
+
+init();
 </script>
 {% endblock %}

@@ -11,6 +11,21 @@
   .label-name { width: 36px; font-weight: 700; color: #6b7280; font-size: 13px; }
   .chart-container { background: white; border-radius: 12px; overflow: hidden; border: 1px solid #e5e7eb; }
   .chart-container img { width: 100%; height: auto; display: block; }
+  /* 标签多选下拉 */
+  .tag-select-wrap { position: relative; display: inline-block; min-width: 240px; }
+  .tag-select-display { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; min-height: 32px; padding: 4px 8px; border: 1px solid #d1d5db; border-radius: 6px; cursor: pointer; background: white; }
+  .tag-select-display:focus-within { border-color: #3b82f6; box-shadow: 0 0 0 2px rgba(59,130,246,.2); }
+  .tag-select-chip { display: inline-flex; align-items: center; gap: 2px; padding: 1px 8px; border-radius: 9999px; font-size: 12px; background: #e0f2fe; color: #075985; }
+  .tag-select-chip .chip-remove { cursor: pointer; opacity: 0.5; font-size: 14px; line-height: 1; }
+  .tag-select-chip .chip-remove:hover { opacity: 1; }
+  .tag-select-input { border: none; outline: none; font-size: 13px; min-width: 60px; flex: 1; padding: 2px 0; }
+  .tag-dropdown { position: absolute; top: 100%; left: 0; right: 0; background: white; border: 1px solid #d1d5db; border-radius: 6px; box-shadow: 0 4px 12px rgba(0,0,0,.1); max-height: 200px; overflow-y: auto; z-index: 50; display: none; margin-top: 2px; }
+  .tag-dropdown.open { display: block; }
+  .tag-dropdown-item { padding: 6px 12px; font-size: 13px; cursor: pointer; display: flex; align-items: center; gap: 6px; }
+  .tag-dropdown-item:hover { background: #f3f4f6; }
+  .tag-dropdown-item.selected { background: #eff6ff; color: #1d4ed8; }
+  .tag-dropdown-create { padding: 6px 12px; font-size: 13px; cursor: pointer; color: #3b82f6; border-top: 1px solid #e5e7eb; }
+  .tag-dropdown-create:hover { background: #eff6ff; }
   @media (max-width: 768px) { .detail-grid { grid-template-columns: 1fr; } }
 </style>
 {% endblock %}
@@ -18,7 +33,7 @@
 {% block content %}
 <div class="flex items-center justify-between mb-4">
   <div class="flex items-center gap-4">
-    <a href="/batches/{{ batch_id }}" class="text-gray-400 hover:text-gray-600">&larr; 返回列表</a>
+    <a href="/" class="text-gray-400 hover:text-gray-600">&larr; 返回列表</a>
     <h1 class="text-xl font-bold text-gray-800">
       <span class="font-mono">{{ stock.symbol }}</span>
       <span class="text-gray-500 font-normal ml-2">{{ stock.symbol_name }}</span>
@@ -26,8 +41,32 @@
     <span id="market-tag"></span>
   </div>
   <div class="flex items-center gap-2">
+    <button class="btn btn-ghost btn-sm" onclick="reanalyze()" id="btn-reanalyze" title="重新分析此股票">重新分析</button>
     <button class="btn btn-ghost btn-sm" onclick="goPrev()" title="上一只 (←)">← 上一只</button>
     <button class="btn btn-ghost btn-sm" onclick="goNext()" title="下一只 (→)">下一只 →</button>
+  </div>
+</div>
+
+<!-- 标签 + 截止日期 -->
+<div class="flex items-center gap-4 mb-4 text-sm">
+  <div class="flex items-center gap-2">
+    <span class="text-gray-500">标签:</span>
+    <div class="tag-select-wrap" id="tag-select-wrap">
+      <div class="tag-select-display" onclick="toggleTagDropdown()">
+        <span id="tag-chips-area"></span>
+        <input type="text" class="tag-select-input" id="tag-search-input"
+          placeholder="搜索或添加标签..."
+          oninput="filterTagDropdown(this.value)"
+          onfocus="openTagDropdown()"
+          onkeydown="tagInputKeydown(event)">
+      </div>
+      <div class="tag-dropdown" id="tag-dropdown"></div>
+    </div>
+  </div>
+  <div class="flex items-center gap-2">
+    <span class="text-gray-500">截止日期:</span>
+    <span id="stock-end-date" class="font-mono">{{ stock.end_date or '-' }}</span>
+    <button class="text-blue-500 hover:text-blue-700 text-xs" onclick="editEndDate()">修改</button>
   </div>
 </div>
 
@@ -119,9 +158,18 @@
 {% block scripts %}
 <script>
 const STOCK_ID = '{{ stock.id }}';
-const BATCH_ID = '{{ batch_id }}';
 let stockData = null;
-let stockList = [];  // batch中所有股票
+let stockList = [];  // 筛选后的股票列表
+let allAvailableTags = [];  // 所有可用标签
+let currentStockTags = [];  // 当前股票的标签
+let tagDropdownOpen = false;
+
+// 加载所有标签
+async function loadAllTags() {
+  try {
+    allAvailableTags = await api('/api/tags');
+  } catch(e) { allAvailableTags = []; }
+}
 
 // 加载详情
 async function loadDetail() {
@@ -130,13 +178,152 @@ async function loadDetail() {
     document.getElementById('market-tag').innerHTML = marketTag(stockData.market);
     renderAlgoResults(stockData);
     if (stockData.label) fillLabel(stockData.label);
+    currentStockTags = stockData.tags || [];
+    renderTagSelect();
+    document.getElementById('stock-end-date').textContent = stockData.end_date || '-';
   } catch(e) { showToast(e.message, 'error'); }
 }
 
-// 加载列表（用于上下切换）
+// ─── 标签下拉多选 ───
+function renderTagSelect() {
+  const area = document.getElementById('tag-chips-area');
+  area.innerHTML = currentStockTags.map(t =>
+    '<span class="tag-select-chip">' + t +
+    ' <span class="chip-remove" onclick="event.stopPropagation();removeTag(\'' + t.replace(/'/g, "\\'") + '\')">&times;</span></span>'
+  ).join('');
+  renderTagDropdownItems('');
+}
+
+function renderTagDropdownItems(filter) {
+  const dd = document.getElementById('tag-dropdown');
+  const lowerFilter = filter.toLowerCase();
+  // 合并已有标签名
+  const tagNames = allAvailableTags.map(t => t.name);
+  // 加入当前股票的标签（可能有不在全局列表中的）
+  currentStockTags.forEach(t => { if (!tagNames.includes(t)) tagNames.push(t); });
+
+  const filtered = tagNames.filter(n => !lowerFilter || n.toLowerCase().includes(lowerFilter));
+  let html = filtered.map(name => {
+    const selected = currentStockTags.includes(name);
+    return '<div class="tag-dropdown-item' + (selected ? ' selected' : '') + '" onclick="event.stopPropagation();toggleTagItem(\'' + name.replace(/'/g, "\\'") + '\')">' +
+      '<span>' + (selected ? '&#10003; ' : '') + name + '</span></div>';
+  }).join('');
+
+  // 如果输入了新内容且不在已有列表中
+  if (filter && !tagNames.some(n => n.toLowerCase() === lowerFilter)) {
+    html += '<div class="tag-dropdown-create" onclick="event.stopPropagation();createAndAddTag(\'' + filter.replace(/'/g, "\\'") + '\')">+ 创建标签 "' + filter + '"</div>';
+  }
+
+  if (!html) {
+    html = '<div class="tag-dropdown-item" style="color:#9ca3af;cursor:default">无匹配标签</div>';
+  }
+  dd.innerHTML = html;
+}
+
+function toggleTagDropdown() {
+  const input = document.getElementById('tag-search-input');
+  input.focus();
+}
+
+function openTagDropdown() {
+  const dd = document.getElementById('tag-dropdown');
+  dd.classList.add('open');
+  tagDropdownOpen = true;
+  renderTagDropdownItems(document.getElementById('tag-search-input').value);
+}
+
+function closeTagDropdown() {
+  const dd = document.getElementById('tag-dropdown');
+  dd.classList.remove('open');
+  tagDropdownOpen = false;
+}
+
+function filterTagDropdown(value) {
+  renderTagDropdownItems(value);
+  if (!tagDropdownOpen) openTagDropdown();
+}
+
+function tagInputKeydown(e) {
+  if (e.key === 'Escape') {
+    closeTagDropdown();
+    e.target.blur();
+  } else if (e.key === 'Enter') {
+    e.preventDefault();
+    const val = e.target.value.trim();
+    if (val) {
+      createAndAddTag(val);
+      e.target.value = '';
+    }
+  } else if (e.key === 'Backspace' && !e.target.value && currentStockTags.length > 0) {
+    // 删除最后一个标签
+    removeTag(currentStockTags[currentStockTags.length - 1]);
+  }
+}
+
+async function toggleTagItem(name) {
+  const idx = currentStockTags.indexOf(name);
+  if (idx >= 0) {
+    currentStockTags.splice(idx, 1);
+  } else {
+    currentStockTags.push(name);
+  }
+  renderTagSelect();
+  await saveStockTags();
+}
+
+async function removeTag(name) {
+  const idx = currentStockTags.indexOf(name);
+  if (idx >= 0) currentStockTags.splice(idx, 1);
+  renderTagSelect();
+  await saveStockTags();
+}
+
+async function createAndAddTag(name) {
+  name = name.trim();
+  if (!name) return;
+  if (!currentStockTags.includes(name)) {
+    currentStockTags.push(name);
+  }
+  document.getElementById('tag-search-input').value = '';
+  renderTagSelect();
+  await saveStockTags();
+  // 刷新全局标签列表
+  await loadAllTags();
+  renderTagDropdownItems('');
+}
+
+async function saveStockTags() {
+  try {
+    await api('/api/stocks/' + STOCK_ID, {
+      method: 'PUT',
+      body: JSON.stringify({ tags: currentStockTags })
+    });
+    if (stockData) stockData.tags = [...currentStockTags];
+  } catch(e) { showToast(e.message, 'error'); }
+}
+
+// 点击外部关闭下拉
+document.addEventListener('click', function(e) {
+  const wrap = document.getElementById('tag-select-wrap');
+  if (wrap && !wrap.contains(e.target)) {
+    closeTagDropdown();
+  }
+});
+
+// 加载列表（用于上下切换）— 使用 sessionStorage 中保存的筛选条件
 async function loadStockList() {
   try {
-    stockList = await api('/api/stocks?batch_id=' + BATCH_ID);
+    let url = '/api/stocks';
+    const params = [];
+    const saved = sessionStorage.getItem('stockFilter');
+    if (saved) {
+      const f = JSON.parse(saved);
+      if (f.tag) params.push('tag=' + encodeURIComponent(f.tag));
+      if (f.label_status) params.push('label_status=' + f.label_status);
+      if (f.market) params.push('market=' + f.market);
+    }
+    if (params.length) url += '?' + params.join('&');
+    stockList = await api(url);
   } catch(e) {}
 }
 
@@ -157,7 +344,6 @@ function renderAlgoResults(data) {
         '</div>';
       }).join('');
       document.getElementById('algo-results').innerHTML = html;
-      // 显示标注判断
       const verdict = data.label.verdict || '';
       const reason = data.label.reason || '';
       document.getElementById('algo-conclusion').innerHTML = reason ? '<div>' + reason + '</div>' : '';
@@ -186,7 +372,6 @@ function renderAlgoResults(data) {
       } else {
         grade = d.result.score || '-';
       }
-      // reasoning - 显示全部
       if (d.result.reasoning && d.result.reasoning.length) {
         detail = d.result.reasoning.join('; ');
       }
@@ -200,7 +385,6 @@ function renderAlgoResults(data) {
 
   document.getElementById('algo-results').innerHTML = html;
 
-  // 结论
   const lines = sc.conclusion_lines || [];
   document.getElementById('algo-conclusion').innerHTML = lines.map(l => '<div>' + l + '</div>').join('');
   document.getElementById('algo-position').innerHTML = sc.position_size ? '仓位建议: <b>' + sc.position_size + '</b>' : '';
@@ -258,16 +442,45 @@ async function saveLabel(e) {
   finally { btn.disabled = false; btn.textContent = '保存标注'; }
 }
 
+async function reanalyze() {
+  const btn = document.getElementById('btn-reanalyze');
+  btn.disabled = true; btn.textContent = '分析中...';
+  try {
+    await api('/api/stocks/' + STOCK_ID + '/analyze', { method: 'POST' });
+    showToast('重新分析已启动，请稍候刷新页面');
+    // 3秒后刷新
+    setTimeout(() => window.location.reload(), 3000);
+  } catch(e) {
+    showToast(e.message, 'error');
+    btn.disabled = false; btn.textContent = '重新分析';
+  }
+}
+
+async function editEndDate() {
+  const current = stockData ? stockData.end_date : '';
+  const newDate = prompt('修改截止日期 (YYYY-MM-DD)', current || '');
+  if (newDate === null) return;
+  try {
+    await api('/api/stocks/' + STOCK_ID, {
+      method: 'PUT',
+      body: JSON.stringify({ end_date: newDate || null })
+    });
+    document.getElementById('stock-end-date').textContent = newDate || '-';
+    if (stockData) stockData.end_date = newDate || null;
+    showToast('截止日期已更新');
+  } catch(e) { showToast(e.message, 'error'); }
+}
+
 function getCurrentIndex() {
   return stockList.findIndex(s => s.id === STOCK_ID);
 }
 function goPrev() {
   const idx = getCurrentIndex();
-  if (idx > 0) window.location.href = '/batches/' + BATCH_ID + '/stock/' + stockList[idx-1].id;
+  if (idx > 0) window.location.href = '/stocks/' + stockList[idx-1].id;
 }
 function goNext() {
   const idx = getCurrentIndex();
-  if (idx < stockList.length - 1) window.location.href = '/batches/' + BATCH_ID + '/stock/' + stockList[idx+1].id;
+  if (idx < stockList.length - 1) window.location.href = '/stocks/' + stockList[idx+1].id;
 }
 
 // 快捷键
@@ -278,7 +491,7 @@ document.addEventListener('keydown', function(e) {
   if (e.ctrlKey && e.key === 'Enter') { e.preventDefault(); saveLabel().then(goNext); }
 });
 
-loadDetail();
+loadAllTags().then(() => loadDetail());
 loadStockList();
 </script>
 {% endblock %}

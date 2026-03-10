@@ -262,14 +262,15 @@ class AnalyzerConfig:
     lk_narrow_penalty: float = 0.10       # 窄结构评分惩罚
 
     # TY 统一区间
-    ty_squeeze_atr_ratio: float = 0.60     # 小K线判定(振幅 < ATR*ratio)
-    ty_slightly_large_ratio: float = 1.20  # 稍大K线上限(60%~120%间容忍1根,≈平均ATR)
+    ty_squeeze_atr_ratio: float = 0.70     # 小K线判定(振幅 < ATR*ratio)
+    ty_slightly_large_ratio: float = 1.20  # 稍大K线上限(75%~120%间容忍1根,≈平均ATR)
     ty_scan_window: int = 30               # 从尾部扫描的K线数
     ty_max_interruptions: int = 1          # 允许夹杂的非小K线数
     ty_max_gap_to_trigger: int = 1         # 与触发K线最大间距
     ty_slope_s_threshold: float = 0.03     # S级斜率阈值(接近水平)
     ty_slope_a_threshold: float = 0.10     # A级斜率阈值(斜率较平)
     ty_slope_b_threshold: float = 0.30     # B级斜率阈值
+    ty_visual_atr_gate: float = 0.75       # 结构ATR<全局ATR*此值时启用视觉尺度
 
     # DN 动能
     dn_force_ratio_s: float = 3.0          # S级力度比阈值

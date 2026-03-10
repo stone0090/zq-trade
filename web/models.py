@@ -3,28 +3,52 @@ from pydantic import BaseModel
 from typing import Optional, List
 
 
-# ─── 批次 ───
+# ─── 股票导入 ───
 
-class BatchCreate(BaseModel):
-    name: str = ""
+class StockImport(BaseModel):
     symbols: List[str]
     end_date: Optional[str] = None
+    tags: Optional[List[str]] = None  # 标签名列表
 
 
-class BatchResponse(BaseModel):
+class StockUpdate(BaseModel):
+    end_date: Optional[str] = None
+    tags: Optional[List[str]] = None
+
+
+class BatchUpdate(BaseModel):
+    stock_ids: List[str]
+    end_date: Optional[str] = None
+    tags: Optional[List[str]] = None
+    tag_mode: str = "replace"  # "replace" 全量替换 | "add" 追加标签
+
+
+class ImportResult(BaseModel):
+    imported: int
+    skipped: int
+    stock_ids: List[str]
+
+
+# ─── 标签 ───
+
+class TagCreate(BaseModel):
+    name: str
+
+
+class TagResponse(BaseModel):
     id: str
     name: str
+    stock_count: int
     created_at: str
-    status: str
-    total_count: int
-    completed_count: int
-    labeled_count: int
 
 
-class BatchProgress(BaseModel):
-    status: str
-    total_count: int
-    completed_count: int
+# ─── 分析进度 ───
+
+class AnalysisProgress(BaseModel):
+    running: bool
+    total: int
+    completed: int
+    current_symbol: Optional[str] = None
 
 
 # ─── 股票列表项 ───
@@ -46,6 +70,7 @@ class StockListItem(BaseModel):
     position_size: Optional[str]
     label_status: str  # "labeled" | "unlabeled"
     analyzed_at: Optional[str]
+    tags: List[str] = []
 
 
 # ─── 股票详情 ───
@@ -69,6 +94,7 @@ class StockDetail(BaseModel):
     position_size: Optional[str]
     label: Optional[dict]
     analyzed_at: Optional[str]
+    tags: List[str] = []
 
 
 # ─── 标注 ───

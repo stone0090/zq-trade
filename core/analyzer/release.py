@@ -65,6 +65,49 @@ def analyze_release(df: pd.DataFrame,
         down = (first_half_avg - float(np.min(back_rolling))) / baseline * 100
         peak_excursion = max(0.0, up, down)
 
+    # ─── 1b. 尾部回落检测：如果后半段曾蹭上去但尾部回落到LK轮廓中游 ───
+    # 用户洞察：如果价格回调到LK轮廓中位价附近，释放级别应回退
+    tail_k = min(max(4, n // 10), 10)
+    tail_close = close[-tail_k:]
+    tail_avg = float(np.mean(tail_close))
+
+    if direction == 'bullish':
+        final_drift = (tail_avg - first_half_avg) / baseline * 100
+        final_drift = max(0.0, final_drift)
+    elif direction == 'bearish':
+        final_drift = (first_half_avg - tail_avg) / baseline * 100
+        final_drift = max(0.0, final_drift)
+    else:
+        final_drift = max(0.0, abs(tail_avg - first_half_avg) / baseline * 100)
+
+    # 回落生效条件：
+    # 1) 峰值显著进入2nd区间（至少超过1st阈值50%，排除边界噪声）
+    # 2) 尾部回落到1st阈值以下（价格已经回来了）
+    # 3) 尾部均价处于LK轮廓中游（≤结构中位价）
+    # 4) 尾部波动平稳（非剧烈震荡），确认是真正的回落企稳
+    recovered = False
+    original_peak = peak_excursion  # 保存原始峰值用于日志
+    struct_mid = float((struct_df['High'].max() + struct_df['Low'].min()) / 2)
+    recovery_min_peak = config.sf_tail_drift_1st_max * 1.5  # 排除边界噪声
+    if (peak_excursion > recovery_min_peak
+            and peak_excursion <= config.sf_tail_drift_2nd_max
+            and final_drift <= config.sf_tail_drift_1st_max):
+        # 验证尾部是否已回到LK轮廓中游地段
+        if direction == 'bullish':
+            at_mid = tail_avg <= struct_mid
+        elif direction == 'bearish':
+            at_mid = tail_avg >= struct_mid
+        else:
+            at_mid = abs(tail_avg - struct_mid) / baseline * 100 < 1.0
+
+        # 验证尾部波动平稳（tail range < 3.5%），排除尾部剧烈震荡
+        tail_range_pct = (float(np.max(tail_close)) - float(np.min(tail_close))) / baseline * 100
+        calm_tail = tail_range_pct < 3.5
+
+        if at_mid and calm_tail:
+            recovered = True
+            peak_excursion = final_drift
+
     # ─── 2. V型结构检测：前后水平相近，中间低洼 → 回归而非释放 ───
     q = max(n // 4, 5)
     front_q_avg = float(np.mean(close[:q]))
@@ -119,5 +162,11 @@ def analyze_release(df: pd.DataFrame,
 
     if is_v_pattern:
         result.reasoning.append("V型结构检测：前后水平相近，中间低洼，峰值已折扣")
+
+    if recovered:
+        result.reasoning.append(
+            f"尾部回落检测：峰值偏移曾达{original_peak:.2f}%→{drift:.2f}%，"
+            f"末端{tail_k}根K线均价{tail_avg:.2f}≤结构中位{struct_mid:.2f}，视为恢复"
+        )
 
     return result
