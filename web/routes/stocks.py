@@ -23,6 +23,13 @@ def list_stocks(
     label_status: Optional[str] = Query(None),
     market: Optional[str] = Query(None),
     status: Optional[str] = Query(None),
+    search: Optional[str] = Query(None),
+    dl: Optional[str] = Query(None),
+    pt: Optional[str] = Query(None),
+    lk: Optional[str] = Query(None),
+    sf: Optional[str] = Query(None),
+    ty: Optional[str] = Query(None),
+    dn: Optional[str] = Query(None),
 ):
     with get_db() as conn:
         conditions = []
@@ -39,6 +46,29 @@ def list_stocks(
         if status:
             conditions.append("s.status = ?")
             params.append(status)
+        if search:
+            search_term = f"%{search}%"
+            conditions.append(
+                "(s.symbol LIKE ? OR s.symbol_name LIKE ? OR s.end_date LIKE ? OR s.market LIKE ?)"
+            )
+            params.extend([search_term, search_term, search_term, search_term])
+
+        # 各维度评级筛选
+        _grade_map = {'S': ('S',), 'A': ('S', 'A'), 'B': ('S', 'A', 'B')}
+        _sf_map = {'1st': ('1st',), '2nd': ('1st', '2nd')}
+        for col, val, mapping in [
+            ('dl_grade', dl, _grade_map),
+            ('pt_grade', pt, _grade_map),
+            ('lk_grade', lk, _grade_map),
+            ('ty_grade', ty, _grade_map),
+            ('dn_grade', dn, _grade_map),
+            ('sf_grade', sf, _sf_map),
+        ]:
+            if val and val in mapping:
+                allowed = mapping[val]
+                placeholders = ','.join('?' * len(allowed))
+                conditions.append(f"COALESCE(s.{col}, l.{col}) IN ({placeholders})")
+                params.extend(allowed)
 
         where = ""
         if conditions:
@@ -113,7 +143,10 @@ def import_stocks(req: StockImport):
                     tag_ids.append(tag_id)
 
         for sym in symbols:
-            existing = conn.execute("SELECT id FROM stocks WHERE symbol=?", (sym,)).fetchone()
+            existing = conn.execute(
+                "SELECT id FROM stocks WHERE symbol=? AND COALESCE(end_date, '')=COALESCE(?, '')",
+                (sym, req.end_date)
+            ).fetchone()
             if existing:
                 skipped += 1
                 stock_id = existing['id']

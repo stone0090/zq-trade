@@ -45,7 +45,7 @@ def init_db():
         conn.executescript("""
         CREATE TABLE IF NOT EXISTS stocks (
             id TEXT PRIMARY KEY,
-            symbol TEXT NOT NULL UNIQUE,
+            symbol TEXT NOT NULL,
             symbol_name TEXT NOT NULL DEFAULT '',
             market TEXT NOT NULL DEFAULT 'cn',
             end_date TEXT,
@@ -65,6 +65,9 @@ def init_db():
             analyzed_at TEXT,
             updated_at TEXT
         );
+
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_stocks_symbol_enddate
+            ON stocks(symbol, COALESCE(end_date, ''));
 
         CREATE TABLE IF NOT EXISTS tags (
             id TEXT PRIMARY KEY,
@@ -108,6 +111,9 @@ def init_db():
 
         # 增量迁移：为已有数据库添加 updated_at 列
         _ensure_updated_at_column(conn)
+
+        # 增量迁移：symbol UNIQUE → (symbol, end_date) 联合唯一索引
+        _migrate_symbol_unique_to_compound(conn)
 
 
 def _migrate_from_batches(conn):
@@ -203,7 +209,7 @@ def _migrate_from_batches(conn):
     conn.executescript("""
     CREATE TABLE stocks (
         id TEXT PRIMARY KEY,
-        symbol TEXT NOT NULL UNIQUE,
+        symbol TEXT NOT NULL,
         symbol_name TEXT NOT NULL DEFAULT '',
         market TEXT NOT NULL DEFAULT 'cn',
         end_date TEXT,
@@ -222,6 +228,9 @@ def _migrate_from_batches(conn):
         created_at TEXT NOT NULL,
         analyzed_at TEXT
     );
+
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_stocks_symbol_enddate
+        ON stocks(symbol, COALESCE(end_date, ''));
 
     CREATE TABLE IF NOT EXISTS tags (
         id TEXT PRIMARY KEY,
@@ -347,3 +356,66 @@ def _ensure_updated_at_column(conn):
         conn.execute("ALTER TABLE stocks ADD COLUMN updated_at TEXT")
         # 用 analyzed_at 或 created_at 回填
         conn.execute("UPDATE stocks SET updated_at = COALESCE(analyzed_at, created_at)")
+
+
+def _migrate_symbol_unique_to_compound(conn):
+    """将 stocks 表从 symbol UNIQUE 迁移到 (symbol, end_date) 联合唯一索引"""
+    # 检查旧表是否有 symbol UNIQUE 约束（列级约束）
+    tbl_sql = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='stocks'"
+    ).fetchone()
+    if not tbl_sql:
+        return
+
+    # 如果表 SQL 不含 'UNIQUE'，说明已是新结构，只需确保索引存在
+    if 'UNIQUE' not in tbl_sql['sql']:
+        conn.execute("""
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_stocks_symbol_enddate
+                ON stocks(symbol, COALESCE(end_date, ''))
+        """)
+        return
+
+    print("迁移 stocks 表: symbol UNIQUE → (symbol, end_date) 联合唯一索引...")
+
+    # 获取当前所有列名
+    cols_info = conn.execute("PRAGMA table_info(stocks)").fetchall()
+    cols = [r['name'] for r in cols_info]
+    cols_str = ', '.join(cols)
+
+    conn.execute("PRAGMA foreign_keys=OFF")
+
+    # 创建新表（无 symbol UNIQUE）
+    col_defs = []
+    for r in cols_info:
+        name, typ, notnull, dflt, pk = r['name'], r['type'], r['notnull'], r['dflt_value'], r['pk']
+        parts = [name, typ or 'TEXT']
+        if pk:
+            parts.append('PRIMARY KEY')
+        if notnull and not pk:
+            parts.append('NOT NULL')
+        if dflt is not None:
+            parts.append(f'DEFAULT {dflt}')
+        col_defs.append(' '.join(parts))
+
+    create_sql = f"CREATE TABLE stocks_new ({', '.join(col_defs)})"
+    conn.execute(create_sql)
+    conn.execute(f"INSERT INTO stocks_new ({cols_str}) SELECT {cols_str} FROM stocks")
+
+    # 删除旧索引（如果有）
+    conn.execute("DROP INDEX IF EXISTS idx_stocks_symbol_enddate")
+
+    conn.execute("DROP TABLE stocks")
+    conn.execute("ALTER TABLE stocks_new RENAME TO stocks")
+
+    # 创建联合唯一索引
+    conn.execute("""
+        CREATE UNIQUE INDEX idx_stocks_symbol_enddate
+            ON stocks(symbol, COALESCE(end_date, ''))
+    """)
+
+    # 重建其他索引
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_labels_stock_id ON labels(stock_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_stock_tags_tag ON stock_tags(tag_id)")
+
+    conn.execute("PRAGMA foreign_keys=ON")
+    print("  迁移完成！")

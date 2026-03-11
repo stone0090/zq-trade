@@ -76,7 +76,7 @@ def analyze_stock(symbol: str, end_date: str = None, chart_dir: str = None) -> d
         from core.report.chart import _build_chart
         chart_dir_path = Path(chart_dir)
         chart_dir_path.mkdir(parents=True, exist_ok=True)
-        filepath = str(chart_dir_path / f"{symbol}.png")
+        filepath = str(chart_dir_path / f"{symbol}_{end_date or 'latest'}.png")
 
         with _chart_lock:
             fig = _build_chart(df, card)

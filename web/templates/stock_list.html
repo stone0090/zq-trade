@@ -19,6 +19,8 @@
 <!-- 筛选栏 + 统计 -->
 <div class="flex items-center justify-between mb-4">
   <div class="flex items-center gap-3">
+    <input type="text" id="filter-search" placeholder="搜索代码/名称/日期/市场..."
+           oninput="debounceSearch()" class="text-sm w-48 px-2 py-1 border rounded">
     <select id="filter-label" onchange="applyFilter()" class="text-sm">
       <option value="">全部标注</option>
       <option value="unlabeled">未标注</option>
@@ -29,6 +31,40 @@
       <option value="cn">A股</option>
       <option value="hk">港股</option>
       <option value="us">美股</option>
+    </select>
+    <span class="text-gray-300">|</span>
+    <select id="filter-dl" onchange="applyFilter()" class="text-sm w-20">
+      <option value="">DL</option>
+      <option value="S">≥S</option>
+    </select>
+    <select id="filter-pt" onchange="applyFilter()" class="text-sm w-20">
+      <option value="">PT</option>
+      <option value="S">≥S</option>
+      <option value="A">≥A</option>
+      <option value="B">≥B</option>
+    </select>
+    <select id="filter-lk" onchange="applyFilter()" class="text-sm w-20">
+      <option value="">LK</option>
+      <option value="S">≥S</option>
+      <option value="A">≥A</option>
+      <option value="B">≥B</option>
+    </select>
+    <select id="filter-sf" onchange="applyFilter()" class="text-sm w-20">
+      <option value="">SF</option>
+      <option value="1st">1st</option>
+      <option value="2nd">≤2nd</option>
+    </select>
+    <select id="filter-ty" onchange="applyFilter()" class="text-sm w-20">
+      <option value="">TY</option>
+      <option value="S">≥S</option>
+      <option value="A">≥A</option>
+      <option value="B">≥B</option>
+    </select>
+    <select id="filter-dn" onchange="applyFilter()" class="text-sm w-20">
+      <option value="">DN</option>
+      <option value="S">≥S</option>
+      <option value="A">≥A</option>
+      <option value="B">≥B</option>
     </select>
     <span id="stock-count" class="text-sm text-gray-500"></span>
   </div>
@@ -173,6 +209,12 @@ let currentTag = '';  // 当前选中的 tag name
 let selectedIds = new Set();  // 批量选中的 stock id
 let sortField = '';   // 当前排序字段: symbol, symbol_name, updated_at
 let sortDir = '';     // asc / desc
+let _searchTimer = null;  // 搜索防抖定时器
+
+function debounceSearch() {
+  if (_searchTimer) clearTimeout(_searchTimer);
+  _searchTimer = setTimeout(() => applyFilter(), 300);
+}
 
 // ─── 初始化 ───
 async function init() {
@@ -184,6 +226,13 @@ async function init() {
       if (f.tag) currentTag = f.tag;
       if (f.label_status) document.getElementById('filter-label').value = f.label_status;
       if (f.market) document.getElementById('filter-market').value = f.market;
+      if (f.search) document.getElementById('filter-search').value = f.search;
+      if (f.dl) document.getElementById('filter-dl').value = f.dl;
+      if (f.pt) document.getElementById('filter-pt').value = f.pt;
+      if (f.lk) document.getElementById('filter-lk').value = f.lk;
+      if (f.sf) document.getElementById('filter-sf').value = f.sf;
+      if (f.ty) document.getElementById('filter-ty').value = f.ty;
+      if (f.dn) document.getElementById('filter-dn').value = f.dn;
     } catch(e) {}
   }
   await Promise.all([loadTags(), loadStocks()]);
@@ -228,6 +277,12 @@ async function loadStocks() {
     if (fl) params.push('label_status=' + fl);
     const fm = document.getElementById('filter-market').value;
     if (fm) params.push('market=' + fm);
+    const fs = document.getElementById('filter-search').value.trim();
+    if (fs) params.push('search=' + encodeURIComponent(fs));
+    ['dl','pt','lk','sf','ty','dn'].forEach(dim => {
+      const v = document.getElementById('filter-' + dim).value;
+      if (v) params.push(dim + '=' + encodeURIComponent(v));
+    });
     if (params.length) url += '?' + params.join('&');
 
     allStocks = await api(url);
@@ -361,11 +416,16 @@ function updateSortIcons() {
 }
 
 function saveFilter() {
-  sessionStorage.setItem('stockFilter', JSON.stringify({
+  const f = {
     tag: currentTag,
     label_status: document.getElementById('filter-label').value,
     market: document.getElementById('filter-market').value,
-  }));
+    search: document.getElementById('filter-search').value.trim(),
+  };
+  ['dl','pt','lk','sf','ty','dn'].forEach(dim => {
+    f[dim] = document.getElementById('filter-' + dim).value;
+  });
+  sessionStorage.setItem('stockFilter', JSON.stringify(f));
 }
 
 function goDetail(stockId) {
