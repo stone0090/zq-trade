@@ -94,6 +94,7 @@ class StockDetail(BaseModel):
     analyzed_at: Optional[str]
     updated_at: Optional[str]
     tags: List[str] = []
+    fundamentals: Optional[dict] = None
 
 
 # ─── 标注 ───

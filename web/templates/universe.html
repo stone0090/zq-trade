@@ -1,0 +1,578 @@
+{% extends "base.html" %}
+{% block title %}ZQ-Trade 品种库{% endblock %}
+
+{% block content %}
+<div class="flex items-center justify-between mb-6">
+  <h1 class="text-2xl font-bold text-gray-800">品种库管理</h1>
+  <div class="flex gap-3">
+    <button class="btn btn-ghost btn-sm" onclick="refreshPrices()">刷新价格</button>
+    <button class="btn btn-ghost btn-sm" onclick="createMockData()">生成模拟数据</button>
+    <button class="btn btn-primary" onclick="showAddModal()">+ 手动添加</button>
+  </div>
+</div>
+
+<!-- Tabs（带常驻数量） -->
+<div class="flex gap-1 mb-4 border-b">
+  <button class="tab-btn" data-tab="pending" onclick="switchTab('pending')">待入库 <span id="tab-count-pending" class="tab-badge">0</span></button>
+  <button class="tab-btn" data-tab="idle" onclick="switchTab('idle')">在库中 <span id="tab-count-idle" class="tab-badge">0</span></button>
+  <button class="tab-btn" data-tab="watching" onclick="switchTab('watching')">关注中 <span id="tab-count-watching" class="tab-badge">0</span></button>
+  <button class="tab-btn active" data-tab="focused" onclick="switchTab('focused')">重点关注 <span id="tab-count-focused" class="tab-badge">0</span></button>
+  <button class="tab-btn" data-tab="holding" onclick="switchTab('holding')">持仓中 <span id="tab-count-holding" class="tab-badge">0</span></button>
+  <button class="tab-btn" data-tab="removed" onclick="switchTab('removed')">已移除 <span id="tab-count-removed" class="tab-badge">0</span></button>
+</div>
+
+<!-- 搜索 + 六维筛选 -->
+<div class="flex items-center gap-3 mb-4">
+  <input type="text" id="search-input" placeholder="搜索代码或名称..." class="w-64" oninput="debounceLoad()">
+  <span class="text-gray-300">|</span>
+  <select id="filter-dl" onchange="applyFilter()" class="text-sm w-20">
+    <option value="">DL</option>
+    <option value="S">&ge;S</option>
+  </select>
+  <select id="filter-pt" onchange="applyFilter()" class="text-sm w-20">
+    <option value="">PT</option>
+    <option value="S">&ge;S</option>
+    <option value="A">&ge;A</option>
+    <option value="B">&ge;B</option>
+  </select>
+  <select id="filter-lk" onchange="applyFilter()" class="text-sm w-20">
+    <option value="">LK</option>
+    <option value="S">&ge;S</option>
+    <option value="A">&ge;A</option>
+    <option value="B">&ge;B</option>
+  </select>
+  <select id="filter-sf" onchange="applyFilter()" class="text-sm w-20">
+    <option value="">SF</option>
+    <option value="1st">1st</option>
+    <option value="2nd">&le;2nd</option>
+  </select>
+  <select id="filter-ty" onchange="applyFilter()" class="text-sm w-20">
+    <option value="">TY</option>
+    <option value="S">&ge;S</option>
+    <option value="A">&ge;A</option>
+    <option value="B">&ge;B</option>
+  </select>
+  <select id="filter-dn" onchange="applyFilter()" class="text-sm w-20">
+    <option value="">DN</option>
+    <option value="S">&ge;S</option>
+    <option value="A">&ge;A</option>
+    <option value="B">&ge;B</option>
+  </select>
+</div>
+
+<!-- 表格 -->
+<div class="bg-white rounded-lg shadow-sm overflow-hidden">
+  <table class="w-full text-sm">
+    <thead class="bg-gray-50 text-gray-600">
+      <tr>
+        <th class="px-4 py-3 text-left"><input type="checkbox" id="select-all" onchange="toggleSelectAll()"></th>
+        <th class="px-4 py-3 text-left">代码</th>
+        <th class="px-4 py-3 text-left" style="width:120px;max-width:120px">名称</th>
+        <th class="px-4 py-3 text-center">市场</th>
+        <th class="px-4 py-3 text-right" id="col-price" style="display:none">最新价</th>
+        <th class="px-4 py-3 text-center">DL</th>
+        <th class="px-4 py-3 text-center">PT</th>
+        <th class="px-4 py-3 text-center">LK</th>
+        <th class="px-4 py-3 text-center">SF</th>
+        <th class="px-4 py-3 text-center">TY</th>
+        <th class="px-4 py-3 text-center">DN</th>
+        <th class="px-4 py-3 text-center">更新时间</th>
+        <th class="px-4 py-3 text-center" id="col-alert" style="display:none">异动</th>
+        <th class="px-4 py-3 text-center">操作</th>
+      </tr>
+    </thead>
+    <tbody id="stock-table-body">
+    </tbody>
+  </table>
+  <div id="empty-state" class="hidden p-8 text-center text-gray-400">暂无数据</div>
+  <!-- 分页控件 -->
+  <div id="pagination-bar" class="hidden flex items-center justify-between px-4 py-3 border-t">
+    <div class="flex items-center gap-2 text-sm text-gray-500">
+      <span>每页</span>
+      <select id="page-size-select" onchange="changePageSize(this.value)" class="text-sm border rounded px-1 py-0.5">
+        <option value="20" selected>20</option>
+        <option value="50">50</option>
+        <option value="100">100</option>
+        <option value="500">500</option>
+        <option value="all">全部</option>
+      </select>
+      <span>条</span>
+      <span class="ml-2" id="pagination-info"></span>
+    </div>
+    <div class="flex items-center gap-2">
+      <button class="btn btn-ghost btn-sm" id="prev-page-btn" onclick="changePage(-1)">上一页</button>
+      <span class="text-sm text-gray-600" id="page-indicator">1/1</span>
+      <button class="btn btn-ghost btn-sm" id="next-page-btn" onclick="changePage(1)">下一页</button>
+    </div>
+  </div>
+</div>
+
+<!-- 批量操作栏 -->
+<div id="batch-bar" class="hidden fixed bottom-6 left-1/2 transform -translate-x-1/2 bg-white shadow-lg rounded-lg px-6 py-3 flex items-center gap-4 border">
+  <span class="text-sm text-gray-600">已选 <span id="selected-count">0</span> 项</span>
+  <button class="btn btn-success btn-sm" onclick="batchAction('confirm')" id="batch-main-btn">批量确认</button>
+  <button class="btn btn-danger btn-sm" onclick="batchAction('remove')" id="batch-remove-btn">批量移除</button>
+  <button class="btn btn-danger btn-sm" onclick="batchAction('delete')" id="batch-delete-btn" style="display:none">批量删除</button>
+  <button class="btn btn-ghost btn-sm" onclick="clearSelection()">取消</button>
+</div>
+
+<!-- 添加品种弹窗 -->
+<div id="add-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-40">
+  <div class="bg-white rounded-lg shadow-xl p-6 w-96">
+    <h3 class="text-lg font-bold mb-4">添加品种</h3>
+    <div class="mb-3">
+      <label class="block text-sm font-medium text-gray-700 mb-1">股票代码</label>
+      <input type="text" id="add-symbol" placeholder="如 AAPL、600802、00700" class="w-full">
+      <p class="text-xs text-gray-400 mt-1">系统自动检测市场：纯数字6位=A股，4-5位=港股，字母=美股</p>
+    </div>
+    <div class="mb-4">
+      <label class="block text-sm font-medium text-gray-700 mb-1">初始状态</label>
+      <select id="add-status" class="w-full">
+        <option value="pending">待入库（需确认）</option>
+        <option value="idle">在库中（直接入库）</option>
+      </select>
+    </div>
+    <div class="flex gap-3 justify-end">
+      <button class="btn btn-ghost" onclick="closeAddModal()">取消</button>
+      <button class="btn btn-primary" onclick="submitAdd()">添加</button>
+    </div>
+  </div>
+</div>
+
+<style>
+  .tab-btn { padding: 10px 16px; font-size: 13px; color: #6b7280; border-bottom: 2px solid transparent; cursor: pointer; background: none; border-top: none; border-left: none; border-right: none; }
+  .tab-btn:hover { color: #1f2937; }
+  .tab-btn.active { color: #2563eb; border-bottom-color: #2563eb; font-weight: 600; }
+  .tab-badge { display: inline-block; min-width: 18px; padding: 0 5px; margin-left: 4px; border-radius: 9px; font-size: 11px; line-height: 18px; text-align: center; background: #e5e7eb; color: #6b7280; font-weight: 600; }
+  .tab-btn.active .tab-badge { background: #dbeafe; color: #2563eb; }
+  .price-cell { font-family: 'Courier New', monospace; }
+  .status-analyzing { color: #f59e0b; }
+  .status-completed { color: #10b981; }
+  .status-error { color: #ef4444; }
+  .status-pending { color: #6b7280; }
+</style>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let currentTab = 'focused';
+let allStocks = [];
+let selectedIds = new Set();
+let debounceTimer = null;
+let autoRefreshTimer = null;
+let currentPage = 1;
+let totalPages = 1;
+let totalCount = 0;
+let pageSize = localStorage.getItem('universePageSize') === 'all' ? 'all' : (parseInt(localStorage.getItem('universePageSize')) || 20);
+
+const monitorTabs = new Set(['watching', 'focused', 'holding']);
+
+function debounceLoad() {
+  clearTimeout(debounceTimer);
+  debounceTimer = setTimeout(loadStocks, 300);
+}
+
+function getApiBase() {
+  return monitorTabs.has(currentTab) ? '/api/monitor' : '/api/universe';
+}
+
+async function loadStocks() {
+  const search = document.getElementById('search-input').value;
+  var params = ['watch_status=' + currentTab];
+  params.push('page=' + currentPage);
+  params.push('page_size=' + (pageSize === 'all' ? 10000 : pageSize));
+  if (search) params.push('search=' + encodeURIComponent(search));
+  ['dl','pt','lk','sf','ty','dn'].forEach(function(dim) {
+    var v = document.getElementById('filter-' + dim).value;
+    if (v) params.push(dim + '=' + encodeURIComponent(v));
+  });
+  var url = getApiBase() + '/stocks?' + params.join('&');
+
+  try {
+    var data = await api(url);
+    allStocks = data.items;
+    totalCount = data.total;
+    totalPages = data.total_pages || 1;
+    currentPage = data.page;
+    renderTable();
+    updatePagination();
+  } catch(e) {
+    showToast(e.message, 'error');
+  }
+}
+
+function applyFilter() {
+  currentPage = 1;
+  saveFilter();
+  loadStocks();
+}
+
+function saveFilter() {
+  var f = { tab: currentTab, search: document.getElementById('search-input').value, page: currentPage };
+  ['dl','pt','lk','sf','ty','dn'].forEach(function(dim) {
+    f[dim] = document.getElementById('filter-' + dim).value;
+  });
+  sessionStorage.setItem('universeFilter', JSON.stringify(f));
+}
+
+function restoreFilter() {
+  // 恢复分页大小
+  var sel = document.getElementById('page-size-select');
+  sel.value = pageSize === 'all' ? 'all' : pageSize;
+  var saved = sessionStorage.getItem('universeFilter');
+  if (!saved) return;
+  try {
+    var f = JSON.parse(saved);
+    if (f.tab) { currentTab = f.tab; }
+    if (f.page) { currentPage = f.page; }
+    if (f.search) document.getElementById('search-input').value = f.search;
+    ['dl','pt','lk','sf','ty','dn'].forEach(function(dim) {
+      if (f[dim]) document.getElementById('filter-' + dim).value = f[dim];
+    });
+  } catch(e) {}
+}
+
+function updatePagination() {
+  var pbar = document.getElementById('pagination-bar');
+  if (totalCount === 0) { pbar.classList.add('hidden'); return; }
+  pbar.classList.remove('hidden');
+  document.getElementById('page-indicator').textContent = currentPage + '/' + totalPages;
+  var ps = pageSize === 'all' ? 10000 : pageSize;
+  var start = (currentPage - 1) * ps + 1;
+  var end = Math.min(currentPage * ps, totalCount);
+  document.getElementById('pagination-info').textContent = '共 ' + totalCount + ' 条，当前 ' + start + '-' + end;
+  document.getElementById('prev-page-btn').disabled = currentPage <= 1;
+  document.getElementById('next-page-btn').disabled = currentPage >= totalPages;
+}
+
+function changePage(delta) {
+  var newPage = currentPage + delta;
+  if (newPage < 1 || newPage > totalPages) return;
+  currentPage = newPage;
+  saveFilter();
+  loadStocks();
+}
+
+function changePageSize(val) {
+  if (val === 'all') { pageSize = 'all'; }
+  else { pageSize = parseInt(val) || 20; }
+  localStorage.setItem('universePageSize', pageSize);
+  currentPage = 1;
+  saveFilter();
+  loadStocks();
+}
+
+async function loadStats() {
+  try {
+    const stats = await api('/api/universe/stats');
+    var tabs = ['pending', 'idle', 'watching', 'focused', 'holding', 'removed'];
+    tabs.forEach(function(t) {
+      var el = document.getElementById('tab-count-' + t);
+      if (el) el.textContent = stats[t] || 0;
+    });
+  } catch(e) {}
+}
+
+/** 统一的刷新入口：刷新当前列表 + 刷新所有Tab数量 */
+function refreshAll() {
+  loadStocks();
+  loadStats();
+}
+
+function switchTab(tab, resetPage) {
+  currentTab = tab;
+  if (resetPage !== false) currentPage = 1;
+  document.querySelectorAll('.tab-btn').forEach(function(b) { b.classList.remove('active'); });
+  var tabBtn = document.querySelector('[data-tab="' + tab + '"]');
+  if (tabBtn) tabBtn.classList.add('active');
+  selectedIds.clear();
+  updateBatchBar();
+  loadStocks();
+  setupAutoRefresh();
+
+  // 价格列和异动列显隐
+  var showPrice = monitorTabs.has(tab);
+  document.getElementById('col-price').style.display = showPrice ? '' : 'none';
+  document.getElementById('col-alert').style.display = showPrice ? '' : 'none';
+
+  // 批量操作按钮适配
+  var mainBtn = document.getElementById('batch-main-btn');
+  var removeBtn = document.getElementById('batch-remove-btn');
+  var deleteBtn = document.getElementById('batch-delete-btn');
+  if (tab === 'removed') {
+    mainBtn.textContent = '批量恢复';
+    mainBtn.onclick = function() { batchAction('restore'); };
+    mainBtn.style.display = '';
+    removeBtn.style.display = 'none';
+    deleteBtn.style.display = '';
+  } else if (tab === 'pending') {
+    mainBtn.textContent = '批量确认';
+    mainBtn.onclick = function() { batchAction('confirm'); };
+    mainBtn.style.display = '';
+    removeBtn.style.display = '';
+    deleteBtn.style.display = 'none';
+  } else if (tab === 'idle') {
+    mainBtn.textContent = '批量升级扫描';
+    mainBtn.onclick = function() { batchAction('upgrade_watching'); };
+    mainBtn.style.display = '';
+    removeBtn.style.display = '';
+    deleteBtn.style.display = 'none';
+  } else {
+    mainBtn.style.display = 'none';
+    removeBtn.textContent = '批量移除';
+    removeBtn.style.display = '';
+    deleteBtn.style.display = 'none';
+  }
+}
+
+function setupAutoRefresh() {
+  clearInterval(autoRefreshTimer);
+  var intervals = {focused: 60000, watching: 300000, holding: 120000};
+  var interval = intervals[currentTab];
+  if (interval) {
+    autoRefreshTimer = setInterval(refreshAll, interval);
+  }
+}
+
+function renderTable() {
+  var tbody = document.getElementById('stock-table-body');
+  var empty = document.getElementById('empty-state');
+  var showPrice = monitorTabs.has(currentTab);
+
+  if (allStocks.length === 0) {
+    tbody.innerHTML = '';
+    empty.classList.remove('hidden');
+    return;
+  }
+  empty.classList.add('hidden');
+
+  tbody.innerHTML = allStocks.map(function(s) {
+    return '<tr class="border-t hover:bg-gray-50 ' + (selectedIds.has(s.id) ? 'bg-blue-50' : '') + '">' +
+      '<td class="px-4 py-3"><input type="checkbox" ' + (selectedIds.has(s.id)?'checked':'') + ' onchange="toggleSelect(\'' + s.id + '\')"></td>' +
+      '<td class="px-4 py-3 font-mono font-bold"><a href="javascript:void(0)" onclick="goDetail(\'' + s.id + '\')" class="text-blue-600 hover:underline">' + s.symbol + '</a></td>' +
+      '<td class="px-4 py-3 text-gray-600" style="max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + (s.symbol_name || '-') + '">' + (s.symbol_name || '-') + '</td>' +
+      '<td class="px-4 py-3 text-center">' + marketTag(s.market) + '</td>' +
+      (showPrice ? '<td class="px-4 py-3 text-right price-cell">' + (s.last_price ? '$'+Number(s.last_price).toFixed(2) : '-') + '</td>' : '') +
+      '<td class="px-4 py-3 text-center">' + gradeTag(s.dl_grade) + '</td>' +
+      '<td class="px-4 py-3 text-center">' + gradeTag(s.pt_grade) + '</td>' +
+      '<td class="px-4 py-3 text-center">' + gradeTag(s.lk_grade) + '</td>' +
+      '<td class="px-4 py-3 text-center">' + gradeTag(s.sf_grade) + '</td>' +
+      '<td class="px-4 py-3 text-center">' + gradeTag(s.ty_grade) + '</td>' +
+      '<td class="px-4 py-3 text-center">' + gradeTag(s.dn_grade) + '</td>' +
+      '<td class="px-4 py-3 text-center text-xs text-gray-400">' + formatTime(s.updated_at || s.created_at) + '</td>' +
+      (showPrice ? '<td class="px-4 py-3 text-center">' + (s.news_alert ? '<span class="text-yellow-500 text-lg" title="有新闻异动">!</span>' : '') + '</td>' : '') +
+      '<td class="px-4 py-3 text-center">' + renderActions(s) + '</td>' +
+    '</tr>';
+  }).join('');
+}
+
+function formatMktCap(v) {
+  if (!v) return '';
+  if (v >= 1e12) return (v/1e12).toFixed(1) + 'T';
+  if (v >= 1e9) return (v/1e9).toFixed(1) + 'B';
+  if (v >= 1e6) return (v/1e6).toFixed(0) + 'M';
+  return String(v);
+}
+
+function renderFundSummary(s) {
+  var fj = s.fundamental_json;
+  if (!fj) return '<span class="text-gray-300">-</span>';
+  var f;
+  try { f = typeof fj === 'string' ? JSON.parse(fj) : fj; } catch(e) { return '-'; }
+  var parts = [];
+  if (f.sector) parts.push(f.sector);
+  else if (f.industry) parts.push(f.industry);
+  if (f.market_cap) parts.push(formatMktCap(f.market_cap));
+  if (f.pe_ratio) parts.push('PE ' + Number(f.pe_ratio).toFixed(1));
+  return parts.length ? parts.join(' · ') : '-';
+}
+
+function renderAnalysisStatus(s) {
+  var st = s.status;
+  if (!st || st === 'pending') return '<span class="text-xs status-pending">待分析</span>';
+  if (st === 'analyzing') return '<span class="text-xs status-analyzing">分析中...</span>';
+  if (st === 'completed') return '<span class="text-xs status-completed">已完成</span>';
+  if (st === 'error') return '<span class="text-xs status-error" title="' + ((s.error_message||'').replace(/"/g,'&quot;')) + '">失败</span>';
+  return '<span class="text-xs text-gray-400">' + st + '</span>';
+}
+
+function renderActions(s) {
+  var ws = s.watch_status;
+  var btns = [];
+  if (ws === 'pending') {
+    btns.push('<button class="btn btn-success btn-sm" onclick="confirmStock(\'' + s.id + '\')">确认</button>');
+    btns.push('<button class="btn btn-danger btn-sm" onclick="removeStock(\'' + s.id + '\')">拒绝</button>');
+  } else if (ws === 'idle') {
+    btns.push('<button class="btn btn-primary btn-sm" onclick="upgradeStock(\'' + s.id + '\',\'watching\')">→扫描</button>');
+    btns.push('<button class="btn btn-danger btn-sm" onclick="removeStock(\'' + s.id + '\')">移除</button>');
+  } else if (ws === 'watching') {
+    btns.push('<button class="btn btn-success btn-sm" onclick="upgradeStock(\'' + s.id + '\',\'focused\')">升级重点</button>');
+    btns.push('<button class="btn btn-danger btn-sm" onclick="removeStock(\'' + s.id + '\')">移除</button>');
+  } else if (ws === 'focused') {
+    btns.push('<button class="btn btn-ghost btn-sm" onclick="downgradeStock(\'' + s.id + '\',\'watching\')">降级扫描</button>');
+    btns.push('<button class="btn btn-danger btn-sm" onclick="removeStock(\'' + s.id + '\')">移除</button>');
+  } else if (ws === 'holding') {
+    btns.push('<span class="text-xs text-green-600 font-medium">持仓中</span>');
+    btns.push('<button class="btn btn-ghost btn-sm" onclick="downgradeStock(\'' + s.id + '\',\'idle\')">回库</button>');
+  } else if (ws === 'removed') {
+    btns.push('<button class="btn btn-success btn-sm" onclick="restoreStock(\'' + s.id + '\')">恢复</button>');
+    btns.push('<button class="btn btn-danger btn-sm" onclick="deleteStock(\'' + s.id + '\')">删除</button>');
+  }
+  return btns.join(' ');
+}
+
+function toggleSelect(id) {
+  if (selectedIds.has(id)) selectedIds.delete(id);
+  else selectedIds.add(id);
+  updateBatchBar();
+  renderTable();
+}
+
+function toggleSelectAll() {
+  var checked = document.getElementById('select-all').checked;
+  if (checked) allStocks.forEach(function(s) { selectedIds.add(s.id); });
+  else selectedIds.clear();
+  updateBatchBar();
+  renderTable();
+}
+
+function clearSelection() {
+  selectedIds.clear();
+  document.getElementById('select-all').checked = false;
+  updateBatchBar();
+  renderTable();
+}
+
+function updateBatchBar() {
+  var bar = document.getElementById('batch-bar');
+  document.getElementById('selected-count').textContent = selectedIds.size;
+  if (selectedIds.size > 0) bar.classList.remove('hidden');
+  else bar.classList.add('hidden');
+}
+
+async function confirmStock(id) {
+  try {
+    await api('/api/universe/' + id + '/confirm', {method:'POST'});
+    showToast('已确认入库');
+    refreshAll();
+  } catch(e) { showToast(e.message, 'error'); }
+}
+
+async function removeStock(id) {
+  try {
+    var url = monitorTabs.has(currentTab)
+      ? '/api/monitor/' + id + '/remove'
+      : '/api/universe/' + id + '/remove';
+    await api(url, {method:'POST'});
+    showToast('已移除');
+    refreshAll();
+  } catch(e) { showToast(e.message, 'error'); }
+}
+
+async function restoreStock(id) {
+  try {
+    await api('/api/universe/' + id + '/restore', {method:'POST'});
+    showToast('已恢复');
+    refreshAll();
+  } catch(e) { showToast(e.message, 'error'); }
+}
+
+async function deleteStock(id) {
+  if (!confirm('确认彻底删除？此操作不可恢复。')) return;
+  try {
+    await api('/api/universe/' + id, {method:'DELETE'});
+    showToast('已彻底删除');
+    refreshAll();
+  } catch(e) { showToast(e.message, 'error'); }
+}
+
+async function upgradeStock(id, target) {
+  try {
+    await api('/api/universe/' + id + '/upgrade?target=' + target, {method:'POST'});
+    showToast('已升级');
+    refreshAll();
+  } catch(e) { showToast(e.message, 'error'); }
+}
+
+async function downgradeStock(id, target) {
+  try {
+    await api('/api/monitor/' + id + '/downgrade?target=' + target, {method:'POST'});
+    showToast('已降级');
+    refreshAll();
+  } catch(e) { showToast(e.message, 'error'); }
+}
+
+async function batchAction(action) {
+  if (selectedIds.size === 0) return;
+  if (action === 'delete' && !confirm('确认彻底删除 ' + selectedIds.size + ' 个品种？此操作不可恢复。')) return;
+  try {
+    await api('/api/universe/batch-action', {
+      method: 'POST',
+      body: JSON.stringify({stock_ids: Array.from(selectedIds), action: action})
+    });
+    showToast('批量操作完成 (' + selectedIds.size + '项)');
+    selectedIds.clear();
+    updateBatchBar();
+    refreshAll();
+  } catch(e) { showToast(e.message, 'error'); }
+}
+
+async function refreshPrices() {
+  try {
+    showToast('正在刷新价格...');
+    var r = await api('/api/monitor/refresh-prices', {method:'POST'});
+    showToast(r.message || '刷新完成');
+    loadStocks();
+  } catch(e) { showToast(e.message, 'error'); }
+}
+
+async function createMockData() {
+  try {
+    showToast('正在生成模拟数据...');
+    var r = await api('/api/universe/mock-data', {method:'POST'});
+    showToast(r.message || '模拟数据已生成');
+    refreshAll();
+  } catch(e) { showToast(e.message, 'error'); }
+}
+
+function showAddModal() { document.getElementById('add-modal').classList.remove('hidden'); }
+function closeAddModal() { document.getElementById('add-modal').classList.add('hidden'); }
+
+async function submitAdd() {
+  var symbol = document.getElementById('add-symbol').value.trim();
+  var status = document.getElementById('add-status').value;
+  if (!symbol) { showToast('请输入股票代码', 'error'); return; }
+
+  try {
+    var r = await api('/api/universe/add', {
+      method: 'POST',
+      body: JSON.stringify({symbol: symbol, watch_status: status})
+    });
+    showToast(r.message || '已添加');
+    closeAddModal();
+    document.getElementById('add-symbol').value = '';
+    refreshAll();
+  } catch(e) { showToast(e.message, 'error'); }
+}
+
+function formatTime(t) {
+  if (!t) return '-';
+  var d = new Date(t);
+  return (d.getMonth()+1).toString().padStart(2,'0') + '-' + d.getDate().toString().padStart(2,'0') + ' ' +
+         d.getHours().toString().padStart(2,'0') + ':' + d.getMinutes().toString().padStart(2,'0');
+}
+
+function goDetail(stockId) {
+  saveFilter();
+  sessionStorage.setItem('stockDetailFrom', 'universe');
+  window.location.href = '/stocks/' + stockId;
+}
+
+// 初始加载 — 恢复筛选状态，再通过 switchTab 确保表头列显隐与数据列一致
+restoreFilter();
+switchTab(currentTab, false);
+loadStats();
+// 定时刷新数量
+setInterval(loadStats, 30000);
+</script>
+{% endblock %}

@@ -1,0 +1,214 @@
+{% extends "base.html" %}
+{% block title %}ZQ-Trade 监控列表{% endblock %}
+
+{% block content %}
+<div class="flex items-center justify-between mb-6">
+  <h1 class="text-2xl font-bold text-gray-800">监控列表</h1>
+  <div class="flex gap-3">
+    <button class="btn btn-ghost" onclick="refreshPrices()">刷新价格</button>
+  </div>
+</div>
+
+<!-- 统计卡片 -->
+<div class="grid grid-cols-3 gap-4 mb-6">
+  <div class="bg-white rounded-lg shadow-sm p-4 text-center border-l-4 border-red-500">
+    <div class="text-2xl font-bold text-red-600" id="stat-focused">0</div>
+    <div class="text-sm text-gray-500">重点关注 (5min)</div>
+  </div>
+  <div class="bg-white rounded-lg shadow-sm p-4 text-center border-l-4 border-blue-500">
+    <div class="text-2xl font-bold text-blue-600" id="stat-watching">0</div>
+    <div class="text-sm text-gray-500">关注中 (1h)</div>
+  </div>
+  <div class="bg-white rounded-lg shadow-sm p-4 text-center border-l-4 border-green-500">
+    <div class="text-2xl font-bold text-green-600" id="stat-holding">0</div>
+    <div class="text-sm text-gray-500">持仓中</div>
+  </div>
+</div>
+
+<!-- Tabs -->
+<div class="flex gap-1 mb-4 border-b">
+  <button class="tab-btn active" data-tab="focused" onclick="switchTab('focused')">重点关注 <span id="tab-count-focused" class="text-xs"></span></button>
+  <button class="tab-btn" data-tab="watching" onclick="switchTab('watching')">关注中 <span id="tab-count-watching" class="text-xs"></span></button>
+  <button class="tab-btn" data-tab="holding" onclick="switchTab('holding')">持仓中 <span id="tab-count-holding" class="text-xs"></span></button>
+</div>
+
+<!-- 搜索 -->
+<div class="mb-4">
+  <input type="text" id="search-input" placeholder="搜索代码或名称..." class="w-64" oninput="debounceLoad()">
+</div>
+
+<!-- 表格 -->
+<div class="bg-white rounded-lg shadow-sm overflow-hidden">
+  <table class="w-full text-sm">
+    <thead class="bg-gray-50 text-gray-600">
+      <tr>
+        <th class="px-4 py-3 text-left">代码</th>
+        <th class="px-4 py-3 text-left">名称</th>
+        <th class="px-4 py-3 text-center">市场</th>
+        <th class="px-4 py-3 text-right">最新价</th>
+        <th class="px-4 py-3 text-center">DL</th>
+        <th class="px-4 py-3 text-center">PT</th>
+        <th class="px-4 py-3 text-center">LK</th>
+        <th class="px-4 py-3 text-center">SF</th>
+        <th class="px-4 py-3 text-center">TY</th>
+        <th class="px-4 py-3 text-center">DN</th>
+        <th class="px-4 py-3 text-center">更新时间</th>
+        <th class="px-4 py-3 text-center">异动</th>
+        <th class="px-4 py-3 text-center">操作</th>
+      </tr>
+    </thead>
+    <tbody id="stock-table-body">
+    </tbody>
+  </table>
+  <div id="empty-state" class="hidden p-8 text-center text-gray-400">暂无监控品种</div>
+</div>
+
+<style>
+  .tab-btn { padding: 10px 20px; font-size: 14px; color: #6b7280; border-bottom: 2px solid transparent; cursor: pointer; background: none; border-top: none; border-left: none; border-right: none; }
+  .tab-btn:hover { color: #1f2937; }
+  .tab-btn.active { color: #2563eb; border-bottom-color: #2563eb; font-weight: 600; }
+  .price-cell { font-family: 'Courier New', monospace; }
+</style>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let currentTab = 'focused';
+let allStocks = [];
+let debounceTimer = null;
+let autoRefreshTimer = null;
+
+function debounceLoad() {
+  clearTimeout(debounceTimer);
+  debounceTimer = setTimeout(loadStocks, 300);
+}
+
+async function loadStocks() {
+  const search = document.getElementById('search-input').value;
+  let url = `/api/monitor/stocks?watch_status=${currentTab}`;
+  if (search) url += `&search=${encodeURIComponent(search)}`;
+
+  try {
+    allStocks = await api(url);
+    renderTable();
+    document.getElementById('tab-count-' + currentTab).textContent = `(${allStocks.length})`;
+  } catch(e) {
+    showToast(e.message, 'error');
+  }
+}
+
+async function loadStats() {
+  try {
+    const stats = await api('/api/monitor/stats');
+    document.getElementById('stat-focused').textContent = stats.focused || 0;
+    document.getElementById('stat-watching').textContent = stats.watching || 0;
+    document.getElementById('stat-holding').textContent = stats.holding || 0;
+  } catch(e) {}
+}
+
+function switchTab(tab) {
+  currentTab = tab;
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+  document.querySelector(`[data-tab="${tab}"]`).classList.add('active');
+  loadStocks();
+  setupAutoRefresh();
+}
+
+function setupAutoRefresh() {
+  clearInterval(autoRefreshTimer);
+  const intervals = {focused: 60000, watching: 300000, holding: 120000};
+  autoRefreshTimer = setInterval(() => { loadStocks(); loadStats(); }, intervals[currentTab] || 60000);
+}
+
+function renderTable() {
+  const tbody = document.getElementById('stock-table-body');
+  const empty = document.getElementById('empty-state');
+
+  if (allStocks.length === 0) {
+    tbody.innerHTML = '';
+    empty.classList.remove('hidden');
+    return;
+  }
+  empty.classList.add('hidden');
+
+  tbody.innerHTML = allStocks.map(s => `
+    <tr class="border-t hover:bg-gray-50">
+      <td class="px-4 py-3 font-mono font-bold">
+        <a href="/stocks/${s.id}" class="text-blue-600 hover:underline">${s.symbol}</a>
+      </td>
+      <td class="px-4 py-3 text-gray-600">${s.symbol_name || '-'}</td>
+      <td class="px-4 py-3 text-center">${marketTag(s.market)}</td>
+      <td class="px-4 py-3 text-right price-cell">${s.last_price ? '$'+s.last_price.toFixed(2) : '-'}</td>
+      <td class="px-4 py-3 text-center">${gradeTag(s.dl_grade)}</td>
+      <td class="px-4 py-3 text-center">${gradeTag(s.pt_grade)}</td>
+      <td class="px-4 py-3 text-center">${gradeTag(s.lk_grade)}</td>
+      <td class="px-4 py-3 text-center">${gradeTag(s.sf_grade)}</td>
+      <td class="px-4 py-3 text-center">${gradeTag(s.ty_grade)}</td>
+      <td class="px-4 py-3 text-center">${gradeTag(s.dn_grade)}</td>
+      <td class="px-4 py-3 text-center text-xs text-gray-400">${formatTime(s.updated_at)}</td>
+      <td class="px-4 py-3 text-center">${s.news_alert ? '<span class="text-yellow-500 text-lg" title="有新闻异动">⚡</span>' : ''}</td>
+      <td class="px-4 py-3 text-center">${renderActions(s)}</td>
+    </tr>
+  `).join('');
+}
+
+function renderActions(s) {
+  const ws = s.watch_status;
+  let btns = [];
+  if (ws === 'watching') {
+    btns.push(`<button class="btn btn-success btn-sm" onclick="upgradeStock('${s.id}','focused')">升级重点</button>`);
+    btns.push(`<button class="btn btn-danger btn-sm" onclick="removeStock('${s.id}')">移除</button>`);
+  } else if (ws === 'focused') {
+    btns.push(`<button class="btn btn-ghost btn-sm" onclick="downgradeStock('${s.id}','watching')">降级扫描</button>`);
+    btns.push(`<button class="btn btn-danger btn-sm" onclick="removeStock('${s.id}')">移除</button>`);
+  } else if (ws === 'holding') {
+    btns.push(`<span class="text-xs text-green-600 font-medium">持仓中</span>`);
+  }
+  return btns.join(' ');
+}
+
+async function upgradeStock(id, target) {
+  try {
+    await api(`/api/monitor/${id}/upgrade?target=${target}`, {method:'POST'});
+    showToast('已升级');
+    loadStocks(); loadStats();
+  } catch(e) { showToast(e.message, 'error'); }
+}
+
+async function downgradeStock(id, target) {
+  try {
+    await api(`/api/monitor/${id}/downgrade?target=${target}`, {method:'POST'});
+    showToast('已降级');
+    loadStocks(); loadStats();
+  } catch(e) { showToast(e.message, 'error'); }
+}
+
+async function removeStock(id) {
+  try {
+    await api(`/api/monitor/${id}/remove`, {method:'POST'});
+    showToast('已移除');
+    loadStocks(); loadStats();
+  } catch(e) { showToast(e.message, 'error'); }
+}
+
+async function refreshPrices() {
+  try {
+    showToast('正在刷新价格...');
+    const r = await api('/api/monitor/refresh-prices', {method:'POST'});
+    showToast(r.message || '刷新完成');
+    loadStocks();
+  } catch(e) { showToast(e.message, 'error'); }
+}
+
+function formatTime(t) {
+  if (!t) return '-';
+  const d = new Date(t);
+  return `${(d.getMonth()+1).toString().padStart(2,'0')}-${d.getDate().toString().padStart(2,'0')} ${d.getHours().toString().padStart(2,'0')}:${d.getMinutes().toString().padStart(2,'0')}`;
+}
+
+// 初始加载
+loadStocks();
+loadStats();
+setupAutoRefresh();
+</script>
+{% endblock %}

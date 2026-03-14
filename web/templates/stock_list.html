@@ -66,7 +66,6 @@
       <option value="A">≥A</option>
       <option value="B">≥B</option>
     </select>
-    <span id="stock-count" class="text-sm text-gray-500"></span>
   </div>
   <div class="flex items-center gap-2">
     <a id="export-link" href="/api/export" class="btn btn-ghost btn-sm" download>导出CSV</a>
@@ -81,6 +80,7 @@
       <button class="btn btn-ghost btn-sm" onclick="openBatchTagModal()">修改标签</button>
       <button class="btn btn-ghost btn-sm" onclick="batchEditDate()">修改日期</button>
       <button class="btn btn-ghost btn-sm" onclick="batchReanalyze()">重新分析</button>
+      <button class="btn btn-ghost btn-sm" style="color:#ef4444" onclick="batchRemove()">批量移除</button>
     </div>
     <div class="flex items-center gap-2">
       <button class="btn btn-ghost btn-sm" onclick="selectAll()">全选</button>
@@ -107,7 +107,7 @@
       <tr>
         <th class="px-2 py-3 text-center w-8"><input type="checkbox" id="check-all" onchange="toggleAll(this.checked)"></th>
         <th class="px-4 py-3 text-left font-medium text-gray-500 cursor-pointer select-none" onclick="toggleSort('symbol')">代码 <span id="sort-icon-symbol" class="text-xs"></span></th>
-        <th class="px-4 py-3 text-left font-medium text-gray-500 cursor-pointer select-none" onclick="toggleSort('symbol_name')">名称 <span id="sort-icon-symbol_name" class="text-xs"></span></th>
+        <th class="px-4 py-3 text-left font-medium text-gray-500 cursor-pointer select-none" style="width:120px;max-width:120px" onclick="toggleSort('symbol_name')">名称 <span id="sort-icon-symbol_name" class="text-xs"></span></th>
         <th class="px-3 py-3 text-center font-medium text-gray-500">市场</th>
         <th class="px-3 py-3 text-left font-medium text-gray-500">标签</th>
         <th class="px-3 py-3 text-center font-medium text-gray-500">截止日期</th>
@@ -120,13 +120,35 @@
         <th class="px-3 py-3 text-center font-medium text-gray-500">仓位</th>
         <th class="px-3 py-3 text-center font-medium text-gray-500">标注</th>
         <th class="px-3 py-3 text-center font-medium text-gray-500 cursor-pointer select-none" onclick="toggleSort('updated_at')">更新时间 <span id="sort-icon-updated_at" class="text-xs"></span></th>
-        <th class="px-3 py-3 text-center font-medium text-gray-500">状态</th>
+        <th class="px-2 py-3 text-center font-medium text-gray-500">操作</th>
       </tr>
     </thead>
     <tbody id="stock-tbody">
       <tr><td colspan="16" class="text-center py-8 text-gray-400">加载中...</td></tr>
     </tbody>
   </table>
+  <!-- 分页控件 -->
+  <div id="pagination-bar" class="hidden flex items-center justify-between px-4 py-3 border-t">
+    <div class="flex items-center gap-2 text-sm text-gray-500">
+      <span>每页</span>
+      <select id="page-size-select" onchange="changePageSize(this.value)" class="text-sm border rounded px-1 py-0.5">
+        <option value="10">10</option>
+        <option value="20" selected>20</option>
+        <option value="50">50</option>
+        <option value="100">100</option>
+        <option value="500">500</option>
+        <option value="all">全部</option>
+      </select>
+      <span>条</span>
+      <span class="ml-2" id="stock-pagination-info"></span>
+      <span class="ml-3 text-gray-600" id="stock-count"></span>
+    </div>
+    <div class="flex items-center gap-2">
+      <button class="btn btn-ghost btn-sm" id="prev-page-btn" onclick="changePage(-1)">上一页</button>
+      <span class="text-sm text-gray-600" id="page-indicator">1/1</span>
+      <button class="btn btn-ghost btn-sm" id="next-page-btn" onclick="changePage(1)">下一页</button>
+    </div>
+  </div>
 </div>
 
 <!-- 导入弹窗 -->
@@ -210,6 +232,10 @@ let selectedIds = new Set();  // 批量选中的 stock id
 let sortField = '';   // 当前排序字段: symbol, symbol_name, updated_at
 let sortDir = '';     // asc / desc
 let _searchTimer = null;  // 搜索防抖定时器
+let currentPage = 1;
+let totalPages = 1;
+let totalCount = 0;
+let pageSize = localStorage.getItem('stockListPageSize') === 'all' ? 'all' : (parseInt(localStorage.getItem('stockListPageSize')) || 20);
 
 function debounceSearch() {
   if (_searchTimer) clearTimeout(_searchTimer);
@@ -218,6 +244,17 @@ function debounceSearch() {
 
 // ─── 初始化 ───
 async function init() {
+  // 恢复分页大小
+  const sel = document.getElementById('page-size-select');
+  sel.value = pageSize === 'all' ? 'all' : pageSize;
+  // 如果缓存的值不在预设选项中，动态添加
+  if (pageSize !== 'all' && ![10,20,50,100,500].includes(pageSize)) {
+    const opt = document.createElement('option');
+    opt.value = pageSize;
+    opt.textContent = pageSize;
+    sel.insertBefore(opt, sel.querySelector('option[value="all"]'));
+    sel.value = pageSize;
+  }
   // 恢复筛选状态
   const saved = sessionStorage.getItem('stockFilter');
   if (saved) {
@@ -262,6 +299,7 @@ function renderTagChips() {
 
 function filterByTag(name) {
   currentTag = name;
+  currentPage = 1;
   renderTagChips();
   loadStocks();
   saveFilter();
@@ -272,6 +310,8 @@ async function loadStocks() {
   try {
     let url = '/api/stocks';
     const params = [];
+    params.push('page=' + currentPage);
+    params.push('page_size=' + (pageSize === 'all' ? 10000 : pageSize));
     if (currentTag) params.push('tag=' + encodeURIComponent(currentTag));
     const fl = document.getElementById('filter-label').value;
     if (fl) params.push('label_status=' + fl);
@@ -283,10 +323,15 @@ async function loadStocks() {
       const v = document.getElementById('filter-' + dim).value;
       if (v) params.push(dim + '=' + encodeURIComponent(v));
     });
-    if (params.length) url += '?' + params.join('&');
+    url += '?' + params.join('&');
 
-    allStocks = await api(url);
+    const data = await api(url);
+    allStocks = data.items;
+    totalCount = data.total;
+    totalPages = data.total_pages || 1;
+    currentPage = data.page;
     renderStocks(allStocks);
+    updatePagination();
 
     // 更新导出链接
     const exportParams = [];
@@ -303,6 +348,39 @@ async function loadStocks() {
     document.getElementById('stock-tbody').innerHTML =
       '<tr><td colspan="16" class="text-center py-8 text-red-500">加载失败: ' + e.message + '</td></tr>';
   }
+}
+
+function updatePagination() {
+  const pbar = document.getElementById('pagination-bar');
+  if (totalCount === 0) {
+    pbar.classList.add('hidden');
+    return;
+  }
+  pbar.classList.remove('hidden');
+  document.getElementById('page-indicator').textContent = currentPage + '/' + totalPages;
+  const start = (currentPage - 1) * pageSize + 1;
+  const end = Math.min(currentPage * pageSize, totalCount);
+  document.getElementById('stock-pagination-info').textContent = '共 ' + totalCount + ' 条，当前 ' + start + '-' + end;
+  document.getElementById('prev-page-btn').disabled = currentPage <= 1;
+  document.getElementById('next-page-btn').disabled = currentPage >= totalPages;
+}
+
+function changePage(delta) {
+  const newPage = currentPage + delta;
+  if (newPage < 1 || newPage > totalPages) return;
+  currentPage = newPage;
+  loadStocks();
+}
+
+function changePageSize(val) {
+  if (val === 'all') {
+    pageSize = 'all';
+  } else {
+    pageSize = parseInt(val) || 20;
+  }
+  localStorage.setItem('stockListPageSize', pageSize);
+  currentPage = 1;
+  loadStocks();
 }
 
 function positionTag(pos) {
@@ -329,10 +407,18 @@ function statusBadge(s) {
   return m[s] || '';
 }
 
+function labelBadge(s) {
+  // 分析中/待分析/错误 → 显示分析状态；已完成 → 显示标注状态
+  if (s.status === 'pending') return '⏳';
+  if (s.status === 'analyzing') return '🔄';
+  if (s.status === 'error') return '❌';
+  return s.label_status === 'labeled' ? '✅' : '⬜';
+}
+
 function renderStocks(stocks) {
   const tbody = document.getElementById('stock-tbody');
   if (stocks.length === 0) {
-    tbody.innerHTML = '<tr><td colspan="17" class="text-center py-8 text-gray-400">无匹配数据</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="16" class="text-center py-8 text-gray-400">无匹配数据</td></tr>';
     document.getElementById('stock-count').textContent = '';
     return;
   }
@@ -353,7 +439,7 @@ function renderStocks(stocks) {
 
   const labeled = stocks.filter(s => s.label_status === 'labeled').length;
   document.getElementById('stock-count').textContent =
-    '共 ' + stocks.length + ' 只 | 已标注 ' + labeled + '/' + stocks.length;
+    '| 本页已标注 ' + labeled + '/' + stocks.length;
 
   tbody.innerHTML = sorted.map(s => {
     const labelIcon = s.label_status === 'labeled' ? '✅' : '⬜';
@@ -366,7 +452,7 @@ function renderStocks(stocks) {
     return '<tr class="border-b hover:bg-blue-50 cursor-pointer' + rowBg + '">' +
       '<td class="px-2 py-3 text-center" onclick="event.stopPropagation()"><input type="checkbox" data-id="' + s.id + '"' + checked + ' onchange="toggleSelect(\'' + s.id + '\', this.checked)"></td>' +
       '<td class="px-4 py-3 font-mono font-semibold" onclick="goDetail(\'' + s.id + '\')">' + s.symbol + '</td>' +
-      '<td class="px-4 py-3 text-gray-600" onclick="goDetail(\'' + s.id + '\')">' + (s.symbol_name || '') + '</td>' +
+      '<td class="px-4 py-3 text-gray-600" style="max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + (s.symbol_name || '') + '" onclick="goDetail(\'' + s.id + '\')">' + (s.symbol_name || '') + '</td>' +
       '<td class="px-3 py-3 text-center" onclick="goDetail(\'' + s.id + '\')">' + marketTag(s.market) + '</td>' +
       '<td class="px-3 py-3" onclick="goDetail(\'' + s.id + '\')">' + tagsHtml + '</td>' +
       '<td class="px-3 py-3 text-center text-xs text-gray-500" onclick="goDetail(\'' + s.id + '\')">' + (s.end_date || '') + '</td>' +
@@ -377,15 +463,16 @@ function renderStocks(stocks) {
       '<td class="px-3 py-3 text-center" onclick="goDetail(\'' + s.id + '\')">' + gradeTag(s.ty_grade) + '</td>' +
       '<td class="px-3 py-3 text-center" onclick="goDetail(\'' + s.id + '\')">' + gradeTag(s.dn_grade) + '</td>' +
       '<td class="px-3 py-3 text-center" onclick="goDetail(\'' + s.id + '\')">' + positionTag(s.position_size) + '</td>' +
-      '<td class="px-3 py-3 text-center" onclick="goDetail(\'' + s.id + '\')">' + labelIcon + '</td>' +
+      '<td class="px-3 py-3 text-center" onclick="goDetail(\'' + s.id + '\')">' + labelBadge(s) + '</td>' +
       '<td class="px-3 py-3 text-center text-xs text-gray-400" onclick="goDetail(\'' + s.id + '\')">' + formatTime(s.updated_at) + '</td>' +
-      '<td class="px-3 py-3 text-center" onclick="goDetail(\'' + s.id + '\')">' + statusBadge(s.status) + '</td>' +
+      '<td class="px-2 py-3 text-center" onclick="event.stopPropagation()"><button class="text-gray-400 hover:text-red-500 text-xs" title="移除" onclick="removeStock(\'' + s.id + '\',\'' + s.symbol + '\')">✕</button></td>' +
     '</tr>';
   }).join('');
   updateBatchBar();
 }
 
 function applyFilter() {
+  currentPage = 1;
   saveFilter();
   loadStocks();
 }
@@ -430,6 +517,7 @@ function saveFilter() {
 
 function goDetail(stockId) {
   saveFilter();
+  sessionStorage.setItem('stockDetailFrom', 'stocks');
   window.location.href = '/stocks/' + stockId;
 }
 
@@ -737,6 +825,29 @@ async function batchReanalyze() {
     showToast('批量分析已启动');
     clearSelection();
     pollProgress();
+  } catch(e) { showToast(e.message, 'error'); }
+}
+
+// 批量移除
+async function batchRemove() {
+  if (selectedIds.size === 0) { showToast('请先选择股票', 'error'); return; }
+  if (!confirm('确定移除选中的 ' + selectedIds.size + ' 只股票？')) return;
+  try {
+    const ids = Array.from(selectedIds);
+    await Promise.all(ids.map(id => api('/api/stocks/' + id, { method: 'DELETE' })));
+    showToast('已移除 ' + ids.length + ' 只股票');
+    clearSelection();
+    await Promise.all([loadTags(), loadStocks()]);
+  } catch(e) { showToast(e.message, 'error'); }
+}
+
+// 移除单只股票
+async function removeStock(id, symbol) {
+  if (!confirm('确定移除 ' + symbol + '？')) return;
+  try {
+    await api('/api/stocks/' + id, { method: 'DELETE' });
+    showToast(symbol + ' 已移除');
+    await Promise.all([loadTags(), loadStocks()]);
   } catch(e) { showToast(e.message, 'error'); }
 }
 

@@ -17,7 +17,7 @@ from web.services.export import sync_labels_to_csv
 router = APIRouter(prefix="/api/stocks", tags=["stocks"])
 
 
-@router.get("", response_model=list[StockListItem])
+@router.get("")
 def list_stocks(
     tag: Optional[str] = Query(None),
     label_status: Optional[str] = Query(None),
@@ -30,6 +30,8 @@ def list_stocks(
     sf: Optional[str] = Query(None),
     ty: Optional[str] = Query(None),
     dn: Optional[str] = Query(None),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=10000),
 ):
     with get_db() as conn:
         conditions = []
@@ -99,11 +101,24 @@ def list_stocks(
         if label_status:
             rows = [r for r in rows if r['label_status'] == label_status]
 
+        # 分页
+        total = len(rows)
+        total_pages = (total + page_size - 1) // page_size if page_size > 0 else 0
+        offset = (page - 1) * page_size
+        paged_rows = rows[offset:offset + page_size]
+
         # 获取每只股票的 tags
-        stock_ids = [r['id'] for r in rows]
+        stock_ids = [r['id'] for r in paged_rows]
         stock_tags_map = _get_stock_tags_map(conn, stock_ids)
 
-    return [_row_to_list_item(r, stock_tags_map.get(r['id'], [])) for r in rows]
+    items = [_row_to_list_item(r, stock_tags_map.get(r['id'], [])) for r in paged_rows]
+    return {
+        "items": [item.model_dump() for item in items],
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "total_pages": total_pages,
+    }
 
 
 @router.get("/progress", response_model=AnalysisProgress)
@@ -314,6 +329,13 @@ def get_stock(stock_id: str):
         except (json.JSONDecodeError, TypeError):
             pass
 
+    fundamentals = None
+    if row['fundamental_json']:
+        try:
+            fundamentals = json.loads(row['fundamental_json'])
+        except (json.JSONDecodeError, TypeError):
+            pass
+
     label = None
     if label_row:
         label = {
@@ -354,6 +376,7 @@ def get_stock(stock_id: str):
         analyzed_at=row['analyzed_at'],
         updated_at=row['updated_at'] if 'updated_at' in row.keys() else None,
         tags=tags,
+        fundamentals=fundamentals,
     )
 
 

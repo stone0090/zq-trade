@@ -1,0 +1,143 @@
+{% extends "base.html" %}
+{% block title %}ZQ-Trade 仪表盘{% endblock %}
+
+{% block content %}
+<h1 class="text-2xl font-bold text-gray-800 mb-6">仪表盘</h1>
+
+<!-- 监控概览 -->
+<div class="grid grid-cols-5 gap-4 mb-6">
+  <div class="bg-white rounded-lg shadow-sm p-4 text-center border-l-4 border-red-500">
+    <div class="text-2xl font-bold text-red-600" id="cnt-focused">0</div>
+    <div class="text-sm text-gray-500">重点关注</div>
+  </div>
+  <div class="bg-white rounded-lg shadow-sm p-4 text-center border-l-4 border-blue-500">
+    <div class="text-2xl font-bold text-blue-600" id="cnt-watching">0</div>
+    <div class="text-sm text-gray-500">关注中</div>
+  </div>
+  <div class="bg-white rounded-lg shadow-sm p-4 text-center border-l-4 border-green-500">
+    <div class="text-2xl font-bold text-green-600" id="cnt-holding">0</div>
+    <div class="text-sm text-gray-500">当前持仓</div>
+  </div>
+  <div class="bg-white rounded-lg shadow-sm p-4 text-center border-l-4 border-yellow-500">
+    <div class="text-2xl font-bold text-yellow-600" id="cnt-idle">0</div>
+    <div class="text-sm text-gray-500">在库中</div>
+  </div>
+  <div class="bg-white rounded-lg shadow-sm p-4 text-center border-l-4 border-purple-500">
+    <div class="text-2xl font-bold" id="cnt-pnl">$0</div>
+    <div class="text-sm text-gray-500">总盈亏</div>
+  </div>
+</div>
+
+<!-- 交易业绩 -->
+<div class="grid grid-cols-4 gap-4 mb-6">
+  <div class="bg-white rounded-lg shadow-sm p-4">
+    <div class="text-sm text-gray-500 mb-1">总交易数</div>
+    <div class="text-xl font-bold" id="acct-trades">0</div>
+  </div>
+  <div class="bg-white rounded-lg shadow-sm p-4">
+    <div class="text-sm text-gray-500 mb-1">胜率</div>
+    <div class="text-xl font-bold" id="acct-winrate">0%</div>
+  </div>
+  <div class="bg-white rounded-lg shadow-sm p-4">
+    <div class="text-sm text-gray-500 mb-1">盈亏比</div>
+    <div class="text-xl font-bold" id="acct-pf">0</div>
+  </div>
+  <div class="bg-white rounded-lg shadow-sm p-4">
+    <div class="text-sm text-gray-500 mb-1">最大回撤</div>
+    <div class="text-xl font-bold text-red-600" id="acct-dd">0%</div>
+  </div>
+</div>
+
+<!-- 最近动态 -->
+<div class="grid grid-cols-2 gap-6">
+  <!-- 最近任务执行 -->
+  <div class="bg-white rounded-lg shadow-sm p-4">
+    <h3 class="font-bold text-gray-700 mb-3">最近任务执行</h3>
+    <div id="recent-logs" class="space-y-2 text-sm max-h-64 overflow-y-auto">
+      <div class="text-gray-400 text-center py-4">加载中...</div>
+    </div>
+  </div>
+
+  <!-- 最近通知 -->
+  <div class="bg-white rounded-lg shadow-sm p-4">
+    <h3 class="font-bold text-gray-700 mb-3">最近通知</h3>
+    <div id="recent-notifs" class="space-y-2 text-sm max-h-64 overflow-y-auto">
+      <div class="text-gray-400 text-center py-4">加载中...</div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+async function loadDashboard() {
+  try {
+    const data = await api('/api/dashboard/summary');
+    // 监控计数
+    document.getElementById('cnt-focused').textContent = data.counts.focused;
+    document.getElementById('cnt-watching').textContent = data.counts.watching;
+    document.getElementById('cnt-holding').textContent = data.counts.holding;
+    document.getElementById('cnt-idle').textContent = data.counts.idle;
+
+    // 盈亏
+    const pnl = data.account.total_pnl;
+    const pnlEl = document.getElementById('cnt-pnl');
+    pnlEl.textContent = (pnl >= 0 ? '+$' : '-$') + Math.abs(pnl).toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2});
+    pnlEl.className = 'text-2xl font-bold ' + (pnl >= 0 ? 'text-green-600' : 'text-red-600');
+
+    // 账户
+    document.getElementById('acct-trades').textContent = data.account.total_trades;
+    document.getElementById('acct-winrate').textContent = data.account.win_rate + '%';
+    document.getElementById('acct-pf').textContent = data.account.profit_factor;
+    document.getElementById('acct-dd').textContent = data.account.max_drawdown + '%';
+
+    // 最近日志
+    const logsEl = document.getElementById('recent-logs');
+    if (data.recent_logs.length === 0) {
+      logsEl.innerHTML = '<div class="text-gray-400 text-center py-4">暂无记录</div>';
+    } else {
+      logsEl.innerHTML = data.recent_logs.map(l => {
+        const icon = l.status === 'success' ? '<span class="text-green-500">&#10003;</span>' : '<span class="text-red-500">&#10007;</span>';
+        const jobLabels = {
+          daily_scan:'每日扫描', focus_monitor:'重点监控', watch_monitor:'扫描监控',
+          kline_refresh:'K线刷新', news_collect:'新闻采集', daily_report:'日报推送'
+        };
+        const name = jobLabels[l.job_name] || l.job_name;
+        return `<div class="flex items-center gap-2 py-1 border-b border-gray-100">
+          ${icon} <span class="font-medium">${name}</span>
+          <span class="text-gray-400 flex-1 text-right text-xs">${formatTime(l.started_at)}</span>
+        </div>
+        ${l.result_summary ? '<div class="text-xs text-gray-500 ml-6 mb-1">' + l.result_summary + '</div>' : ''}`;
+      }).join('');
+    }
+
+    // 最近通知
+    const notifsEl = document.getElementById('recent-notifs');
+    if (data.recent_notifications.length === 0) {
+      notifsEl.innerHTML = '<div class="text-gray-400 text-center py-4">暂无通知</div>';
+    } else {
+      const typeLabels = {candidate:'候选', signal:'信号', alert:'异动', report:'日报', text:'文本', card:'卡片'};
+      notifsEl.innerHTML = data.recent_notifications.map(n => {
+        const icon = n.status === 'sent' ? '<span class="text-green-500">&#9679;</span>' : '<span class="text-red-500">&#9679;</span>';
+        return `<div class="flex items-center gap-2 py-1 border-b border-gray-100">
+          ${icon} <span class="text-xs tag tag-B">${typeLabels[n.type]||n.type}</span>
+          <span class="flex-1 truncate">${n.title}</span>
+          <span class="text-gray-400 text-xs">${formatTime(n.created_at)}</span>
+        </div>`;
+      }).join('');
+    }
+  } catch(e) {
+    showToast(e.message, 'error');
+  }
+}
+
+function formatTime(t) {
+  if (!t) return '-';
+  const d = new Date(t);
+  return `${(d.getMonth()+1).toString().padStart(2,'0')}-${d.getDate().toString().padStart(2,'0')} ${d.getHours().toString().padStart(2,'0')}:${d.getMinutes().toString().padStart(2,'0')}`;
+}
+
+loadDashboard();
+setInterval(loadDashboard, 60000);
+</script>
+{% endblock %}

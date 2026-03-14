@@ -1,0 +1,465 @@
+{% extends "base.html" %}
+{% block title %}ZQ-Trade 定时任务{% endblock %}
+
+{% block content %}
+<h1 class="text-2xl font-bold text-gray-800 mb-6">定时任务管理</h1>
+
+<!-- 任务列表 -->
+<div class="bg-white rounded-lg shadow-sm mb-6">
+  <table class="w-full text-sm">
+    <thead class="bg-gray-50 border-b">
+      <tr>
+        <th class="text-left px-4 py-3 font-medium text-gray-600">任务名称</th>
+        <th class="text-left px-4 py-3 font-medium text-gray-600">调度规则</th>
+        <th class="text-left px-4 py-3 font-medium text-gray-600">下次执行</th>
+        <th class="text-left px-4 py-3 font-medium text-gray-600">状态</th>
+        <th class="text-left px-4 py-3 font-medium text-gray-600">操作</th>
+      </tr>
+    </thead>
+    <tbody id="jobs-table"></tbody>
+  </table>
+</div>
+
+<!-- 执行日志 -->
+<div class="flex items-center justify-between mb-3">
+  <h2 class="text-lg font-semibold text-gray-700">执行日志</h2>
+  <div class="flex items-center gap-3">
+    <select id="log-filter" class="text-sm" onchange="loadLogs(1)">
+      <option value="">全部任务</option>
+    </select>
+    <span class="text-sm text-gray-500" id="log-pagination-info"></span>
+  </div>
+</div>
+<div class="bg-white rounded-lg shadow-sm">
+  <table class="w-full text-sm">
+    <thead class="bg-gray-50 border-b">
+      <tr>
+        <th class="text-left px-4 py-3 font-medium text-gray-600 w-40">时间</th>
+        <th class="text-left px-4 py-3 font-medium text-gray-600 w-36">任务</th>
+        <th class="text-left px-4 py-3 font-medium text-gray-600 w-20">耗时</th>
+        <th class="text-left px-4 py-3 font-medium text-gray-600 w-16">状态</th>
+        <th class="text-left px-4 py-3 font-medium text-gray-600">结果</th>
+      </tr>
+    </thead>
+    <tbody id="logs-table"></tbody>
+  </table>
+  <div id="logs-empty" class="hidden text-center py-8 text-gray-400">暂无执行日志</div>
+  <!-- 分页控件 -->
+  <div id="pagination-bar" class="hidden flex items-center justify-between px-4 py-3 border-t">
+    <div class="flex items-center gap-2 text-sm text-gray-500">
+      <span>每页</span>
+      <select id="log-page-size" onchange="changeLogPageSize(this.value)" class="text-sm border rounded px-1 py-0.5">
+        <option value="10">10</option>
+        <option value="20" selected>20</option>
+        <option value="50">50</option>
+        <option value="100">100</option>
+      </select>
+      <span>条</span>
+    </div>
+    <div class="flex items-center gap-2">
+      <button class="btn btn-ghost btn-sm" id="prev-page-btn" onclick="changePage(-1)">上一页</button>
+      <span class="text-sm text-gray-600" id="page-indicator">1/1</span>
+      <button class="btn btn-ghost btn-sm" id="next-page-btn" onclick="changePage(1)">下一页</button>
+    </div>
+  </div>
+</div>
+
+<!-- 编辑触发器弹窗 -->
+<div id="trigger-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-40">
+  <div class="bg-white rounded-lg shadow-xl p-6 w-96">
+    <h3 class="text-lg font-bold mb-4">修改调度周期</h3>
+    <div class="mb-3">
+      <label class="block text-sm font-medium text-gray-700 mb-1">任务</label>
+      <input type="text" id="trigger-job-name" class="w-full" disabled>
+    </div>
+    <div class="mb-3">
+      <label class="block text-sm font-medium text-gray-700 mb-1">调度类型</label>
+      <select id="trigger-type" class="w-full" onchange="toggleTriggerFields()">
+        <option value="interval">间隔执行</option>
+        <option value="cron">定时执行</option>
+      </select>
+    </div>
+    <div id="interval-fields" class="mb-3">
+      <label class="block text-sm font-medium text-gray-700 mb-1">间隔(分钟)</label>
+      <input type="number" id="trigger-minutes" class="w-full" min="1" value="5">
+    </div>
+    <div id="cron-fields" class="mb-3 hidden">
+      <div class="grid grid-cols-2 gap-3">
+        <div>
+          <label class="block text-sm font-medium text-gray-700 mb-1">小时</label>
+          <input type="number" id="trigger-hour" class="w-full" min="0" max="23" value="8">
+        </div>
+        <div>
+          <label class="block text-sm font-medium text-gray-700 mb-1">分钟</label>
+          <input type="number" id="trigger-minute" class="w-full" min="0" max="59" value="0">
+        </div>
+      </div>
+    </div>
+    <div class="flex gap-3 justify-end">
+      <button class="btn btn-ghost" onclick="closeTriggerModal()">取消</button>
+      <button class="btn btn-primary" onclick="saveTrigger()">保存</button>
+    </div>
+  </div>
+</div>
+
+<!-- 编辑任务配置弹窗 -->
+<div id="config-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-40">
+  <div class="bg-white rounded-lg shadow-xl p-6 w-96">
+    <h3 class="text-lg font-bold mb-4">编辑任务信息</h3>
+    <div class="mb-3">
+      <label class="block text-sm font-medium text-gray-700 mb-1">任务名称</label>
+      <input type="text" id="config-name" class="w-full" placeholder="自定义名称">
+    </div>
+    <div class="mb-3">
+      <label class="block text-sm font-medium text-gray-700 mb-1">任务描述</label>
+      <textarea id="config-desc" class="w-full" rows="5" placeholder="任务执行逻辑说明"></textarea>
+    </div>
+    <div class="flex gap-3 justify-end">
+      <button class="btn btn-ghost" onclick="closeConfigModal()">取消</button>
+      <button class="btn btn-primary" onclick="saveConfig()">保存</button>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<style>
+.info-tip {
+  position: relative;
+  display: inline-block;
+  vertical-align: middle;
+}
+.info-tip .tip-content {
+  display: none;
+  position: absolute;
+  left: 50%;
+  bottom: calc(100% + 8px);
+  transform: translateX(-50%);
+  min-width: 280px;
+  max-width: 360px;
+  padding: 10px 14px;
+  background: #1f2937;
+  color: #f3f4f6;
+  font-size: 12px;
+  line-height: 1.6;
+  border-radius: 6px;
+  box-shadow: 0 4px 12px rgba(0,0,0,.15);
+  white-space: normal;
+  text-align: left;
+  font-weight: normal;
+  z-index: 100;
+}
+.info-tip .tip-content::after {
+  content: '';
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  border: 6px solid transparent;
+  border-top-color: #1f2937;
+}
+.info-tip:hover .tip-content,
+.info-tip:focus .tip-content {
+  display: block;
+}
+</style>
+<script>
+let currentPage = 1;
+let totalPages = 1;
+let editingJobId = null;
+let configJobId = null;
+// 缓存任务数据
+let jobsCache = {};
+let jobsList = [];
+let logPageSize = parseInt(localStorage.getItem('schedulerLogPageSize')) || 20;
+
+function formatTrigger(job) {
+  const a = job.trigger_args || {};
+  if (job.trigger === 'cron') {
+    return '每天 ' + String(a.hour||0).padStart(2,'0') + ':' + String(a.minute||0).padStart(2,'0');
+  }
+  if (job.trigger === 'interval') {
+    if (a.minutes) return '每 ' + a.minutes + ' 分钟';
+    if (a.hours) return '每 ' + a.hours + ' 小时';
+    if (a.seconds) return '每 ' + a.seconds + ' 秒';
+  }
+  return job.trigger || '-';
+}
+
+function formatTime(iso) {
+  if (!iso) return '-';
+  const d = new Date(iso);
+  return (d.getMonth()+1) + '-' + d.getDate() + ' ' +
+         String(d.getHours()).padStart(2,'0') + ':' + String(d.getMinutes()).padStart(2,'0') + ':' +
+         String(d.getSeconds()).padStart(2,'0');
+}
+
+function stateLabel(state) {
+  if (state === 'active') return '<span class="text-green-600 font-medium">调度中</span>';
+  if (state === 'paused') return '<span class="text-yellow-600 font-medium">已暂停</span>';
+  return '<span class="text-gray-400">未启用</span>';
+}
+
+function stateActions(j, idx, total) {
+  let btns = [];
+  if (idx > 0) {
+    btns.push('<button class="btn btn-ghost btn-sm px-1" onclick="moveJob(' + idx + ',-1)" title="上移">&#x2191;</button>');
+  }
+  if (idx < total - 1) {
+    btns.push('<button class="btn btn-ghost btn-sm px-1" onclick="moveJob(' + idx + ',1)" title="下移">&#x2193;</button>');
+  }
+  if (j.state === 'active') {
+    btns.push('<button class="btn btn-ghost btn-sm" onclick="pauseJob(\'' + j.id + '\')">暂停</button>');
+  } else if (j.state === 'paused') {
+    btns.push('<button class="btn btn-success btn-sm" onclick="resumeJob(\'' + j.id + '\')">恢复</button>');
+  }
+  btns.push('<button class="btn btn-primary btn-sm" onclick="runJobNow(\'' + j.id + '\')">立即执行</button>');
+  return btns.join(' ');
+}
+
+async function loadJobs() {
+  try {
+    const jobs = await api('/api/scheduler/jobs');
+    const tbody = document.getElementById('jobs-table');
+    const filterSelect = document.getElementById('log-filter');
+
+    jobsCache = {};
+    jobsList = jobs;
+    jobs.forEach(function(j) { jobsCache[j.id] = j; });
+
+    // 更新任务筛选下拉
+    const existingOptions = new Set();
+    for (let i = 0; i < filterSelect.options.length; i++) {
+      existingOptions.add(filterSelect.options[i].value);
+    }
+    jobs.forEach(function(j) {
+      if (!existingOptions.has(j.id)) {
+        const opt = document.createElement('option');
+        opt.value = j.id;
+        opt.textContent = j.name;
+        filterSelect.appendChild(opt);
+      }
+    });
+
+    tbody.innerHTML = jobs.map(function(j, idx) {
+      var desc = (j.description || '');
+      var infoIcon = desc
+        ? ' <span class="info-tip" tabindex="0"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="inline w-4 h-4 text-gray-400 hover:text-blue-500 cursor-help align-text-bottom"><path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a.75.75 0 000 1.5h.253a.25.25 0 01.244.304l-.459 2.066A1.75 1.75 0 0010.747 15H11a.75.75 0 000-1.5h-.253a.25.25 0 01-.244-.304l.459-2.066A1.75 1.75 0 009.253 9H9z" clip-rule="evenodd" /></svg><span class="tip-content">' + desc.replace(/\n/g, '<br>') + '</span></span>'
+        : '';
+      var editBtn = ' <button class="text-gray-400 hover:text-blue-500 text-xs" onclick="openConfigModal(\'' + j.id + '\')" title="编辑名称/描述">&#9998;</button>';
+      return '<tr class="border-b hover:bg-gray-50">' +
+        '<td class="px-4 py-3 font-medium">' + j.name + infoIcon + editBtn + '</td>' +
+        '<td class="px-4 py-3 text-gray-500">' +
+          formatTrigger(j) +
+          ' <button class="text-blue-500 hover:text-blue-700 text-xs ml-2" onclick="openTriggerModal(\'' + j.id + '\')">修改</button>' +
+        '</td>' +
+        '<td class="px-4 py-3 text-gray-500">' + (j.next_run ? formatTime(j.next_run) : '-') + '</td>' +
+        '<td class="px-4 py-3">' + stateLabel(j.state) + '</td>' +
+        '<td class="px-4 py-3">' + stateActions(j, idx, jobs.length) + '</td>' +
+      '</tr>';
+    }).join('');
+  } catch(e) {
+    console.error('loadJobs error:', e);
+    showToast('加载任务列表失败: ' + e.message, 'error');
+  }
+}
+
+async function loadLogs(page) {
+  if (page !== undefined) currentPage = page;
+  const jobFilter = document.getElementById('log-filter').value;
+  let url = '/api/scheduler/logs?page=' + currentPage + '&page_size=' + logPageSize;
+  if (jobFilter) url += '&job_name=' + encodeURIComponent(jobFilter);
+
+  try {
+    const data = await api(url);
+    const logs = data.items;
+    totalPages = data.total_pages || 1;
+    const tbody = document.getElementById('logs-table');
+    const empty = document.getElementById('logs-empty');
+    const pbar = document.getElementById('pagination-bar');
+
+    document.getElementById('page-indicator').textContent = currentPage + '/' + totalPages;
+    document.getElementById('log-pagination-info').textContent = '共 ' + data.total + ' 条';
+    document.getElementById('prev-page-btn').disabled = currentPage <= 1;
+    document.getElementById('next-page-btn').disabled = currentPage >= totalPages;
+
+    if (logs.length === 0) {
+      tbody.innerHTML = '';
+      empty.classList.remove('hidden');
+      pbar.classList.add('hidden');
+      return;
+    }
+    empty.classList.add('hidden');
+    pbar.classList.remove('hidden');
+
+    tbody.innerHTML = logs.map(function(l) {
+      var detail = (l.result_summary || l.error_message || '').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+      var statusHtml = l.status === 'success'
+        ? '<span class="text-green-600">成功</span>'
+        : '<span class="text-red-600">失败</span>';
+      return '<tr class="border-b hover:bg-gray-50">' +
+        '<td class="px-4 py-2 text-gray-500">' + formatTime(l.started_at) + '</td>' +
+        '<td class="px-4 py-2">' + (l.job_name || '') + '</td>' +
+        '<td class="px-4 py-2 text-gray-500">' + (l.duration_ms != null ? (l.duration_ms/1000).toFixed(1)+'s' : '-') + '</td>' +
+        '<td class="px-4 py-2">' + statusHtml + '</td>' +
+        '<td class="px-4 py-2 text-gray-500 truncate max-w-xs" title="' + detail + '">' + detail + '</td>' +
+      '</tr>';
+    }).join('');
+  } catch(e) {
+    console.error('loadLogs error:', e);
+  }
+}
+
+function changePage(delta) {
+  var newPage = currentPage + delta;
+  if (newPage < 1 || newPage > totalPages) return;
+  loadLogs(newPage);
+}
+
+function changeLogPageSize(val) {
+  logPageSize = parseInt(val) || 20;
+  localStorage.setItem('schedulerLogPageSize', logPageSize);
+  currentPage = 1;
+  loadLogs(1);
+}
+
+async function pauseJob(id) {
+  try {
+    var r = await api('/api/scheduler/jobs/' + id + '/pause', { method: 'POST' });
+    showToast(r.ok ? '任务已暂停' : '暂停失败');
+    loadJobs();
+  } catch(e) { showToast('暂停失败: ' + e.message, 'error'); }
+}
+
+async function resumeJob(id) {
+  try {
+    var r = await api('/api/scheduler/jobs/' + id + '/resume', { method: 'POST' });
+    showToast(r.ok ? '任务已恢复' : '恢复失败');
+    loadJobs();
+  } catch(e) { showToast('恢复失败: ' + e.message, 'error'); }
+}
+
+async function runJobNow(id) {
+  try {
+    var r = await api('/api/scheduler/jobs/' + id + '/run', { method: 'POST' });
+    showToast(r.ok ? '任务已触发执行' : '执行失败');
+    // 延迟刷新日志，等任务执行完
+    setTimeout(function() { loadLogs(); loadJobs(); }, 3000);
+  } catch(e) { showToast('执行失败: ' + e.message, 'error'); }
+}
+
+// ─── 触发器编辑弹窗 ───
+
+function openTriggerModal(jobId) {
+  var j = jobsCache[jobId];
+  if (!j) { showToast('找不到任务信息', 'error'); return; }
+
+  editingJobId = jobId;
+  document.getElementById('trigger-job-name').value = j.name;
+  document.getElementById('trigger-type').value = j.trigger;
+
+  var args = j.trigger_args || {};
+  if (j.trigger === 'interval') {
+    var mins = args.minutes || (args.hours ? args.hours * 60 : 5);
+    document.getElementById('trigger-minutes').value = mins;
+  } else {
+    document.getElementById('trigger-hour').value = args.hour || 0;
+    document.getElementById('trigger-minute').value = args.minute || 0;
+  }
+  toggleTriggerFields();
+  document.getElementById('trigger-modal').classList.remove('hidden');
+}
+
+function closeTriggerModal() {
+  document.getElementById('trigger-modal').classList.add('hidden');
+  editingJobId = null;
+}
+
+function toggleTriggerFields() {
+  var type = document.getElementById('trigger-type').value;
+  document.getElementById('interval-fields').classList.toggle('hidden', type !== 'interval');
+  document.getElementById('cron-fields').classList.toggle('hidden', type !== 'cron');
+}
+
+async function saveTrigger() {
+  if (!editingJobId) return;
+  var type = document.getElementById('trigger-type').value;
+  var args = {};
+  if (type === 'interval') {
+    var minutes = parseInt(document.getElementById('trigger-minutes').value) || 5;
+    if (minutes < 1) minutes = 1;
+    args = { minutes: minutes };
+  } else {
+    var hour = parseInt(document.getElementById('trigger-hour').value) || 0;
+    var minute = parseInt(document.getElementById('trigger-minute').value) || 0;
+    args = { hour: hour, minute: minute };
+  }
+
+  try {
+    await api('/api/scheduler/jobs/' + editingJobId + '/trigger', {
+      method: 'PUT',
+      body: JSON.stringify({ trigger: type, trigger_args: args })
+    });
+    showToast('调度周期已更新');
+    closeTriggerModal();
+    loadJobs();
+  } catch(e) { showToast('更新失败: ' + e.message, 'error'); }
+}
+
+// ─── 任务配置编辑弹窗 ───
+
+function openConfigModal(jobId) {
+  var j = jobsCache[jobId];
+  if (!j) { showToast('找不到任务信息', 'error'); return; }
+  configJobId = jobId;
+  document.getElementById('config-name').value = j.name || '';
+  document.getElementById('config-desc').value = (j.description || '');
+  document.getElementById('config-modal').classList.remove('hidden');
+}
+
+function closeConfigModal() {
+  document.getElementById('config-modal').classList.add('hidden');
+  configJobId = null;
+}
+
+async function saveConfig() {
+  if (!configJobId) return;
+  var name = document.getElementById('config-name').value.trim();
+  var desc = document.getElementById('config-desc').value.trim();
+  try {
+    await api('/api/scheduler/jobs/' + configJobId + '/config', {
+      method: 'PUT',
+      body: JSON.stringify({ name: name || null, description: desc || null })
+    });
+    showToast('任务信息已更新');
+    closeConfigModal();
+    loadJobs();
+  } catch(e) { showToast('更新失败: ' + e.message, 'error'); }
+}
+
+// ─── 任务排序 ───
+
+async function moveJob(idx, direction) {
+  var newIdx = idx + direction;
+  if (newIdx < 0 || newIdx >= jobsList.length) return;
+  var tmp = jobsList[idx];
+  jobsList[idx] = jobsList[newIdx];
+  jobsList[newIdx] = tmp;
+  var ids = jobsList.map(function(j) { return j.id; });
+  try {
+    await api('/api/scheduler/jobs/reorder', {
+      method: 'PUT',
+      body: JSON.stringify({ job_ids: ids })
+    });
+    loadJobs();
+  } catch(e) { showToast('排序失败: ' + e.message, 'error'); }
+}
+
+// ─── 初始化 ───
+document.getElementById('log-page-size').value = logPageSize;
+loadJobs();
+loadLogs(1);
+setInterval(loadJobs, 30000);
+setInterval(function() { loadLogs(); }, 15000);
+</script>
+{% endblock %}

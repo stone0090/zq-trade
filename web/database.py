@@ -61,6 +61,12 @@ def init_db():
             dn_grade TEXT,
             conclusion TEXT,
             position_size TEXT,
+            watch_status TEXT DEFAULT 'none',
+            source_type TEXT DEFAULT 'manual',
+            last_price REAL,
+            last_price_time TEXT,
+            fundamental_json TEXT,
+            news_alert INTEGER DEFAULT 0,
             created_at TEXT NOT NULL,
             analyzed_at TEXT,
             updated_at TEXT
@@ -107,6 +113,93 @@ def init_db():
 
         CREATE INDEX IF NOT EXISTS idx_labels_stock_id ON labels(stock_id);
         CREATE INDEX IF NOT EXISTS idx_stock_tags_tag ON stock_tags(tag_id);
+
+        CREATE TABLE IF NOT EXISTS settings (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL DEFAULT '',
+            updated_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS job_logs (
+            id TEXT PRIMARY KEY,
+            job_name TEXT NOT NULL,
+            started_at TEXT NOT NULL,
+            finished_at TEXT,
+            duration_ms INTEGER,
+            status TEXT NOT NULL DEFAULT 'running',
+            result_summary TEXT,
+            error_message TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS notifications (
+            id TEXT PRIMARY KEY,
+            channel TEXT NOT NULL,
+            type TEXT NOT NULL,
+            title TEXT NOT NULL,
+            content TEXT,
+            status TEXT NOT NULL DEFAULT 'sent',
+            error_message TEXT,
+            created_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS stock_sources (
+            id TEXT PRIMARY KEY,
+            stock_id TEXT NOT NULL,
+            source_type TEXT NOT NULL,
+            source_ref TEXT,
+            raw_content TEXT,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY (stock_id) REFERENCES stocks(id) ON DELETE CASCADE
+        );
+
+        CREATE TABLE IF NOT EXISTS paper_orders (
+            id TEXT PRIMARY KEY,
+            stock_id TEXT NOT NULL,
+            symbol TEXT NOT NULL,
+            direction TEXT NOT NULL DEFAULT 'long',
+            order_type TEXT NOT NULL DEFAULT 'market',
+            price REAL NOT NULL,
+            quantity INTEGER NOT NULL,
+            stop_loss REAL,
+            take_profit REAL,
+            status TEXT NOT NULL DEFAULT 'open',
+            open_time TEXT NOT NULL,
+            close_time TEXT,
+            close_price REAL,
+            close_reason TEXT,
+            pnl REAL,
+            pnl_pct REAL,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY (stock_id) REFERENCES stocks(id)
+        );
+
+        CREATE TABLE IF NOT EXISTS paper_account (
+            id TEXT PRIMARY KEY,
+            initial_capital REAL NOT NULL DEFAULT 100000,
+            current_capital REAL NOT NULL DEFAULT 100000,
+            total_trades INTEGER DEFAULT 0,
+            win_trades INTEGER DEFAULT 0,
+            total_pnl REAL DEFAULT 0,
+            max_drawdown REAL DEFAULT 0,
+            updated_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS stock_news (
+            id TEXT PRIMARY KEY,
+            stock_id TEXT NOT NULL,
+            title TEXT NOT NULL,
+            summary TEXT,
+            source TEXT,
+            url TEXT,
+            is_alert INTEGER DEFAULT 0,
+            published_at TEXT,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY (stock_id) REFERENCES stocks(id) ON DELETE CASCADE
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_paper_orders_stock ON paper_orders(stock_id);
+        CREATE INDEX IF NOT EXISTS idx_paper_orders_status ON paper_orders(status);
+        CREATE INDEX IF NOT EXISTS idx_stock_news_stock ON stock_news(stock_id);
         """)
 
         # 增量迁移：为已有数据库添加 updated_at 列
@@ -114,6 +207,19 @@ def init_db():
 
         # 增量迁移：symbol UNIQUE → (symbol, end_date) 联合唯一索引
         _migrate_symbol_unique_to_compound(conn)
+
+        # 增量迁移：为 stocks 表添加 watch_status 等新字段
+        _ensure_watch_status_columns(conn)
+
+        # 任务自定义配置表
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS job_config (
+                job_id TEXT PRIMARY KEY,
+                custom_name TEXT,
+                custom_description TEXT,
+                sort_order INTEGER DEFAULT 0
+            )
+        """)
 
 
 def _migrate_from_batches(conn):
@@ -419,3 +525,20 @@ def _migrate_symbol_unique_to_compound(conn):
 
     conn.execute("PRAGMA foreign_keys=ON")
     print("  迁移完成！")
+
+
+def _ensure_watch_status_columns(conn):
+    """确保 stocks 表有 watch_status/source_type/last_price 等新字段"""
+    cols = [r['name'] for r in conn.execute("PRAGMA table_info(stocks)").fetchall()]
+    new_cols = {
+        'watch_status': "ALTER TABLE stocks ADD COLUMN watch_status TEXT DEFAULT 'none'",
+        'source_type': "ALTER TABLE stocks ADD COLUMN source_type TEXT DEFAULT 'manual'",
+        'last_price': "ALTER TABLE stocks ADD COLUMN last_price REAL",
+        'last_price_time': "ALTER TABLE stocks ADD COLUMN last_price_time TEXT",
+        'fundamental_json': "ALTER TABLE stocks ADD COLUMN fundamental_json TEXT",
+        'news_alert': "ALTER TABLE stocks ADD COLUMN news_alert INTEGER DEFAULT 0",
+    }
+    for col_name, alter_sql in new_cols.items():
+        if col_name not in cols:
+            conn.execute(alter_sql)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_stocks_watch_status ON stocks(watch_status)")

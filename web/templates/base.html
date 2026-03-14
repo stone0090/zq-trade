@@ -30,19 +30,27 @@
     .btn-ghost { background: #f3f4f6; color: #374151; border: 1px solid #d1d5db; }
     .btn-ghost:hover { background: #e5e7eb; }
     .btn-sm { padding: 4px 12px; font-size: 12px; }
-    select, input[type="text"], textarea { border: 1px solid #d1d5db; border-radius: 6px; padding: 6px 10px; font-size: 14px; }
+    select, input[type="text"], input[type="number"], input[type="password"], textarea { border: 1px solid #d1d5db; border-radius: 6px; padding: 6px 10px; font-size: 14px; }
     select:focus, input:focus, textarea:focus { outline: none; border-color: #3b82f6; box-shadow: 0 0 0 2px rgba(59,130,246,.2); }
     .toast { position: fixed; top: 20px; right: 20px; padding: 12px 24px; border-radius: 8px; color: white; font-size: 14px; z-index: 1000; transition: opacity 0.3s; }
     .toast-success { background: #10b981; }
     .toast-error { background: #ef4444; }
+    .nav-link { padding: 8px 16px; font-size: 14px; color: #6b7280; border-radius: 6px; transition: all 0.15s; text-decoration: none; }
+    .nav-link:hover { color: #1f2937; background: #f3f4f6; }
+    .nav-link.active { color: #2563eb; background: #eff6ff; font-weight: 600; }
   </style>
   {% block head %}{% endblock %}
 </head>
 <body>
   <nav class="bg-white shadow-sm border-b mb-6">
-    <div class="max-w-7xl mx-auto px-6 py-3 flex items-center justify-between">
-      <a href="/" class="text-lg font-bold text-gray-800">ZQ-Trade</a>
-      <span class="text-sm text-gray-400">六维分析标注系统</span>
+    <div class="max-w-7xl mx-auto px-6 py-3 flex items-center gap-6">
+      <a href="/" class="text-lg font-bold text-gray-800 mr-4">ZQ-Trade</a>
+      <a href="/dashboard" class="nav-link {% if active_page == 'dashboard' %}active{% endif %}">仪表盘</a>
+      <a href="/" class="nav-link {% if active_page == 'stocks' %}active{% endif %}">标注</a>
+      <a href="/universe" class="nav-link {% if active_page == 'universe' or active_page == 'monitor' %}active{% endif %}">品种库</a>
+      <a href="/trading" class="nav-link {% if active_page == 'trading' %}active{% endif %}">模拟交易</a>
+      <a href="/scheduler" class="nav-link {% if active_page == 'scheduler' %}active{% endif %}">定时任务</a>
+      <a href="/settings" class="nav-link {% if active_page == 'settings' %}active{% endif %}">设置</a>
     </div>
   </nav>
   <div class="max-w-7xl mx-auto px-6 pb-12">

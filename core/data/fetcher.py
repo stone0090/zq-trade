@@ -5,9 +5,32 @@
 通过股票代码自动识别市场，按市场分目录缓存。
 """
 import os
+import time
 import pandas as pd
 from datetime import datetime, timedelta
 from pathlib import Path
+
+
+# ─── API 请求节流 ───
+# 记录各数据源上次请求时间，控制请求间隔避免被限流
+_last_request_time = {}
+_MIN_INTERVAL = {
+    'akshare': 1.0,    # akshare(东财) 最少间隔1秒
+    'sina': 1.0,       # Sina Finance 最少间隔1秒
+    'yahoo': 1.5,      # Yahoo Finance 最少间隔1.5秒
+    'yfinance': 1.0,   # yfinance库 最少间隔1秒
+}
+
+
+def _throttle(source: str):
+    """API 请求节流：确保同一数据源的请求间隔不低于最小间隔"""
+    min_interval = _MIN_INTERVAL.get(source, 1.0)
+    now = time.monotonic()
+    last = _last_request_time.get(source, 0)
+    elapsed = now - last
+    if elapsed < min_interval:
+        time.sleep(min_interval - elapsed)
+    _last_request_time[source] = time.monotonic()
 
 
 # ─── 每日K线根数（用于从目标根数反推天数）───
@@ -89,7 +112,7 @@ def fetch_kline_smart(symbol: str,
 
     cache_file = _cache_path(symbol)
 
-    # ─── 港股/美股：直接通过 Yahoo Finance 获取 ───
+    # ─── 港股/美股：支持增量获取 ───
     if market in ('hk', 'us'):
         local_df = None
         if cache_file.exists():
@@ -109,20 +132,39 @@ def fetch_kline_smart(symbol: str,
                 print(f"  截取 {len(result)} 根 (截至 {end_dt.strftime('%Y-%m-%d')})")
                 return result
 
-        # 拉取数据
+            # 有缓存但不够新 → 增量拉取
+            gap_days = (end_dt - local_end).days
+            if gap_days <= 5:
+                period = '5d'
+            elif gap_days <= 30:
+                period = '1mo'
+            else:
+                period = '6mo'
+
+            yahoo_sym = _to_yahoo_symbol(symbol, market)
+            print(f"增量拉取 {yahoo_sym} (缓存差 {gap_days} 天, range={period}) ...")
+            new_df = _fetch_yahoo(yahoo_sym, period=period)
+            if new_df is not None and not new_df.empty:
+                merged = pd.concat([local_df, new_df])
+                merged = merged[~merged.index.duplicated(keep='last')].sort_index()
+                print(f"  增量 {len(new_df)} 根, 合并后 {len(merged)} 根")
+            else:
+                merged = local_df
+                print(f"  增量获取失败, 使用本地 {len(merged)} 根")
+
+            save_to_csv(merged, str(cache_file))
+            result = merged[merged.index <= end_dt].tail(bars)
+            print(f"数据就绪: {len(result)} 根小时K线")
+            if len(result) > 0:
+                print(f"  范围: {result.index[0]} ~ {result.index[-1]}")
+            return result
+
+        # 无缓存 → 全量拉取
         yahoo_sym = _to_yahoo_symbol(symbol, market)
         print(f"通过 Yahoo Finance 获取 {yahoo_sym} ...")
         merged = _fetch_yahoo(yahoo_sym, period='6mo')
         if merged is None or merged.empty:
-            if local_df is not None and not local_df.empty:
-                print("  Yahoo 获取失败，使用本地缓存")
-                merged = local_df
-            else:
-                raise ValueError(f"未能获取到 {symbol} 的有效数据")
-        else:
-            if local_df is not None and not local_df.empty:
-                merged = pd.concat([local_df, merged])
-                merged = merged[~merged.index.duplicated(keep='last')].sort_index()
+            raise ValueError(f"未能获取到 {symbol} 的有效数据")
 
         save_to_csv(merged, str(cache_file))
         result = merged[merged.index <= end_dt].tail(bars)
@@ -250,6 +292,7 @@ def _fetch_via_akshare(symbol: str, start_date: str, end_date: str) -> pd.DataFr
     except ImportError:
         raise ImportError("请先安装 akshare: pip install akshare")
 
+    _throttle('akshare')
     df = ak.stock_zh_a_hist_min_em(
         symbol=symbol,
         start_date=start_date,
@@ -270,6 +313,7 @@ def _fetch_via_sina(symbol: str, datalen: int = 1500) -> pd.DataFrame:
     import requests
     import json
 
+    _throttle('sina')
     market = 'sh' if symbol.startswith('6') else 'sz'
     sina_symbol = f"{market}{symbol}"
 
@@ -355,6 +399,7 @@ def _fetch_yahoo(yahoo_symbol: str, period: str = '6mo') -> pd.DataFrame:
     import requests
     import json
 
+    _throttle('yahoo')
     url = f'https://query1.finance.yahoo.com/v8/finance/chart/{yahoo_symbol}'
     params = {
         'range': period,
@@ -427,6 +472,7 @@ def _get_cn_stock_name(symbol: str) -> str:
     """通过 Sina Finance 获取A股名称"""
     try:
         import requests
+        _throttle('sina')
         market = 'sh' if symbol.startswith('6') else 'sz'
         url = f"https://hq.sinajs.cn/list={market}{symbol}"
         headers = {'Referer': 'https://finance.sina.com.cn'}
@@ -447,6 +493,7 @@ def _get_yahoo_stock_name(symbol: str, market: str) -> str:
     """通过 Yahoo Finance 获取港股/美股名称"""
     try:
         import requests
+        _throttle('yahoo')
         yahoo_sym = _to_yahoo_symbol(symbol, market)
         url = f'https://query1.finance.yahoo.com/v8/finance/chart/{yahoo_sym}'
         params = {'range': '1d', 'interval': '1d'}

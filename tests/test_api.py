@@ -71,15 +71,17 @@ print(f"  Re-import: Imported={result['imported']}, Skipped={result['skipped']}"
 print("\n--- 股票列表 ---")
 r = client.get("/api/stocks")
 assert r.status_code == 200
-stocks = r.json()
+data = r.json()
+stocks = data['items']
+assert data['total'] == 4
 assert len(stocks) == 4
-print(f"  Total stocks: {len(stocks)}")
+print(f"  Total stocks: {data['total']}")
 print(f"  Symbols: {[s['symbol'] for s in stocks]}")
 
 # 按标签筛选
 r = client.get("/api/stocks?tag=测试标签A")
 assert r.status_code == 200
-filtered = r.json()
+filtered = r.json()['items']
 symbols = [s['symbol'] for s in filtered]
 assert '600000' in symbols
 assert '600001' in symbols
@@ -87,7 +89,7 @@ assert '00700' in symbols
 print(f"  Tag filter '测试标签A': {symbols}")
 
 r = client.get("/api/stocks?tag=测试标签B")
-filtered_b = r.json()
+filtered_b = r.json()['items']
 symbols_b = [s['symbol'] for s in filtered_b]
 assert '600000' in symbols_b  # 600000 导入时关联了 B
 assert '600002' in symbols_b
@@ -145,7 +147,7 @@ print(f"  Label: dl={label['dl_grade']}, verdict={label['verdict']}")
 
 # 9. 标注状态筛选
 r = client.get("/api/stocks?label_status=labeled")
-labeled = r.json()
+labeled = r.json()['items']
 assert len(labeled) == 1
 assert labeled[0]['symbol'] == '600000'
 print(f"  Labeled filter: {[s['symbol'] for s in labeled]}")
@@ -178,23 +180,23 @@ print("  Delete tag: OK")
 
 # 股票应该还在
 r = client.get("/api/stocks")
-assert len(r.json()) == 4
+assert r.json()['total'] == 4
 print("  Stocks still exist after tag delete: OK")
 
 # 13. 删除股票
 print("\n--- 删除股票 ---")
-stock_00700 = next(s for s in r.json() if s['symbol'] == '00700')
+stock_00700 = next(s for s in r.json()['items'] if s['symbol'] == '00700')
 r = client.delete(f"/api/stocks/{stock_00700['id']}")
 assert r.status_code == 200
 r = client.get("/api/stocks")
-assert len(r.json()) == 3
+assert r.json()['total'] == 3
 print("  Delete stock: OK, remaining: 3")
 
 # 14. 批量更新
 print("\n--- 批量更新 ---")
 # 先拿到所有股票
 r = client.get("/api/stocks")
-all_s = r.json()
+all_s = r.json()['items']
 ids_to_update = [s['id'] for s in all_s[:2]]
 
 # 批量修改日期

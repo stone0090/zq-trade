@@ -1,0 +1,168 @@
+{% extends "base.html" %}
+{% block title %}ZQ-Trade 系统设置{% endblock %}
+
+{% block content %}
+<h1 class="text-2xl font-bold text-gray-800 mb-6">系统设置</h1>
+
+<div class="space-y-6">
+  <!-- 通知配置 -->
+  <div class="bg-white rounded-lg shadow-sm p-6">
+    <h2 class="text-lg font-semibold text-gray-700 mb-4">通知配置</h2>
+    <div class="space-y-3">
+      <div class="flex items-center gap-4">
+        <label class="w-28 text-sm text-gray-600">通知通道</label>
+        <select id="cfg-notify-channel" class="text-sm w-48">
+          <option value="">未配置</option>
+          <option value="feishu">飞书 Webhook</option>
+        </select>
+      </div>
+      <div class="flex items-center gap-4">
+        <label class="w-28 text-sm text-gray-600">Webhook URL</label>
+        <input type="text" id="cfg-feishu-url" placeholder="https://open.feishu.cn/open-apis/bot/v2/hook/..." class="text-sm flex-1">
+      </div>
+      <div class="flex items-center gap-4">
+        <label class="w-28 text-sm text-gray-600"></label>
+        <button class="btn btn-ghost btn-sm" onclick="testNotify()">测试发送</button>
+        <span id="notify-status" class="text-sm"></span>
+      </div>
+    </div>
+  </div>
+
+  <!-- 知识星球 -->
+  <div class="bg-white rounded-lg shadow-sm p-6">
+    <h2 class="text-lg font-semibold text-gray-700 mb-4">知识星球</h2>
+    <div class="space-y-3">
+      <div class="flex items-center gap-4">
+        <label class="w-28 text-sm text-gray-600">Access Token</label>
+        <input type="password" id="cfg-zsxq-token" placeholder="Bearer xxxxxxxx" class="text-sm flex-1">
+      </div>
+      <div class="flex items-center gap-4">
+        <label class="w-28 text-sm text-gray-600">星球 Group ID</label>
+        <input type="text" id="cfg-zsxq-group" placeholder="星球ID" class="text-sm w-48">
+      </div>
+    </div>
+  </div>
+
+  <!-- 行情数据 -->
+  <div class="bg-white rounded-lg shadow-sm p-6">
+    <h2 class="text-lg font-semibold text-gray-700 mb-4">行情数据</h2>
+    <div class="space-y-3">
+      <div class="flex items-center gap-4">
+        <label class="w-28 text-sm text-gray-600">美股数据源</label>
+        <select id="cfg-us-datasource" class="text-sm w-48">
+          <option value="yahoo">Yahoo Finance</option>
+          <option value="futu">富途 OpenD</option>
+        </select>
+      </div>
+      <div class="flex items-center gap-4">
+        <label class="w-28 text-sm text-gray-600">富途 OpenD</label>
+        <input type="text" id="cfg-futu-host" placeholder="127.0.0.1" class="text-sm w-32">
+        <input type="text" id="cfg-futu-port" placeholder="11111" class="text-sm w-24">
+      </div>
+    </div>
+  </div>
+
+  <!-- 交易参数 -->
+  <div class="bg-white rounded-lg shadow-sm p-6">
+    <h2 class="text-lg font-semibold text-gray-700 mb-4">交易参数</h2>
+    <div class="space-y-3">
+      <div class="flex items-center gap-4">
+        <label class="w-28 text-sm text-gray-600">初始资金</label>
+        <input type="number" id="cfg-initial-capital" value="100000" class="text-sm w-32">
+        <span class="text-sm text-gray-400">USD</span>
+      </div>
+      <div class="flex items-center gap-4">
+        <label class="w-28 text-sm text-gray-600">单笔风险(1R)</label>
+        <input type="number" id="cfg-risk-pct" value="1" step="0.1" class="text-sm w-24">
+        <span class="text-sm text-gray-400">%</span>
+      </div>
+      <div class="flex items-center gap-4">
+        <label class="w-28 text-sm text-gray-600">最大持仓数</label>
+        <input type="number" id="cfg-max-positions" value="5" class="text-sm w-24">
+      </div>
+      <div class="flex items-center gap-4">
+        <label class="w-28 text-sm text-gray-600">止损方式</label>
+        <select id="cfg-stop-loss-type" class="text-sm w-48">
+          <option value="atr">ATR 止损</option>
+          <option value="percent">百分比止损</option>
+          <option value="structure">结构止损</option>
+        </select>
+        <input type="number" id="cfg-atr-multiplier" value="2.0" step="0.1" class="text-sm w-20">
+        <span class="text-sm text-gray-400">倍</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="flex gap-3">
+    <button class="btn btn-primary" onclick="saveSettings()">保存设置</button>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const FIELD_MAP = {
+  'notify_channel': 'cfg-notify-channel',
+  'feishu_webhook_url': 'cfg-feishu-url',
+  'zsxq_access_token': 'cfg-zsxq-token',
+  'zsxq_group_id': 'cfg-zsxq-group',
+  'us_datasource': 'cfg-us-datasource',
+  'futu_host': 'cfg-futu-host',
+  'futu_port': 'cfg-futu-port',
+  'initial_capital': 'cfg-initial-capital',
+  'risk_pct': 'cfg-risk-pct',
+  'max_positions': 'cfg-max-positions',
+  'stop_loss_type': 'cfg-stop-loss-type',
+  'atr_multiplier': 'cfg-atr-multiplier',
+};
+
+async function loadSettings() {
+  try {
+    const data = await api('/api/settings');
+    for (const item of data) {
+      const elId = FIELD_MAP[item.key];
+      if (elId) {
+        const el = document.getElementById(elId);
+        if (el) el.value = item.value;
+      }
+    }
+  } catch(e) { console.error(e); }
+}
+
+async function saveSettings() {
+  const items = [];
+  for (const [key, elId] of Object.entries(FIELD_MAP)) {
+    const el = document.getElementById(elId);
+    if (el) items.push({ key, value: el.value });
+  }
+  try {
+    await api('/api/settings', {
+      method: 'PUT',
+      body: JSON.stringify({ items })
+    });
+    showToast('设置已保存');
+  } catch(e) { showToast(e.message, 'error'); }
+}
+
+async function testNotify() {
+  const status = document.getElementById('notify-status');
+  status.textContent = '发送中...';
+  status.className = 'text-sm text-gray-500';
+  try {
+    const r = await api('/api/settings/test-notify', { method: 'POST' });
+    if (r.ok) {
+      status.textContent = '✅ 发送成功';
+      status.className = 'text-sm text-green-600';
+    } else {
+      status.textContent = '❌ ' + r.error;
+      status.className = 'text-sm text-red-600';
+    }
+  } catch(e) {
+    status.textContent = '❌ ' + e.message;
+    status.className = 'text-sm text-red-600';
+  }
+}
+
+loadSettings();
+</script>
+{% endblock %}

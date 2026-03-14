@@ -38,7 +38,7 @@
 <div class="sticky top-0 z-30 bg-gray-50 -mx-6 px-6 pt-2 pb-3 border-b border-gray-200" id="sticky-header">
   <div class="flex items-center justify-between mb-2">
     <div class="flex items-center gap-4">
-      <a href="/" class="text-gray-400 hover:text-gray-600">&larr; 返回列表</a>
+      <a id="back-link" href="/" class="text-gray-400 hover:text-gray-600">&larr; 返回列表</a>
       <h1 class="text-xl font-bold text-gray-800">
         <span class="font-mono">{{ stock.symbol }}</span>
         <span class="text-gray-500 font-normal ml-2">{{ stock.symbol_name }}</span>
@@ -78,9 +78,11 @@
       <span id="stock-updated-at" class="font-mono text-gray-400">-</span>
     </div>
   </div>
+  <!-- 基本面摘要（行业/市值） -->
+  <div id="fund-header" class="flex items-center gap-3 text-sm mt-1" style="display:none">
+    <span class="text-gray-400" id="fund-header-text"></span>
+  </div>
 </div>
-
-<!-- 图表 -->
 <div class="chart-container mb-6" id="chart-area">
   {% if stock.status == 'completed' and stock.chart_path %}
   <img src="/api/stocks/{{ stock.id }}/chart?t={{ now }}" alt="K线分析图表" loading="eager">
@@ -93,6 +95,12 @@
   {% else %}
   <div class="text-center py-12 text-gray-400">等待分析</div>
   {% endif %}
+</div>
+
+<!-- 基本面信息 -->
+<div class="bg-white rounded-lg shadow-sm border p-5 mb-6" id="fund-section" style="display:none">
+  <h3 class="font-bold text-gray-700 mb-3">基本面</h3>
+  <div class="grid grid-cols-2 sm:grid-cols-4 gap-x-6 gap-y-2 text-sm" id="fund-grid"></div>
 </div>
 
 <!-- 算法结果 + 标注 -->
@@ -181,12 +189,80 @@ async function loadAllTags() {
   } catch(e) { allAvailableTags = []; }
 }
 
+// 渲染基本面数据
+function renderFundamentals(f) {
+  var section = document.getElementById('fund-section');
+  var grid = document.getElementById('fund-grid');
+  var header = document.getElementById('fund-header');
+  var headerText = document.getElementById('fund-header-text');
+
+  if (!f) {
+    section.style.display = 'none';
+    header.style.display = 'none';
+    return;
+  }
+
+  // 顶部摘要行
+  var summary = [];
+  if (f.sector) summary.push(f.sector);
+  if (f.industry && f.industry !== f.sector) summary.push(f.industry);
+  if (f.market_cap) summary.push(fmtMktCap(f.market_cap));
+  if (f.pe_ratio) summary.push('PE ' + Number(f.pe_ratio).toFixed(1));
+  if (f.beta) summary.push('Beta ' + Number(f.beta).toFixed(2));
+  if (summary.length) {
+    headerText.textContent = summary.join(' · ');
+    header.style.display = '';
+  }
+
+  // 详情卡片
+  section.style.display = '';
+
+  function fmtMktCap(v) {
+    if (!v) return '-';
+    if (v >= 1e12) return (v/1e12).toFixed(1) + 'T';
+    if (v >= 1e9) return (v/1e9).toFixed(1) + 'B';
+    if (v >= 1e6) return (v/1e6).toFixed(0) + 'M';
+    return String(v);
+  }
+  function fmtPct(v) { return v != null ? (v * 100).toFixed(1) + '%' : '-'; }
+  function fmtNum(v, d) { return v != null ? Number(v).toFixed(d || 1) : '-'; }
+  function fmtVol(v) {
+    if (!v) return '-';
+    if (v >= 1e6) return (v/1e6).toFixed(1) + 'M';
+    if (v >= 1e3) return (v/1e3).toFixed(0) + 'K';
+    return String(v);
+  }
+
+  var items = [
+    ['行业', f.sector || f.industry || '-'],
+    ['子行业', f.industry && f.sector ? f.industry : ''],
+    ['市值', fmtMktCap(f.market_cap)],
+    ['PE', fmtNum(f.pe_ratio)],
+    ['PB', fmtNum(f.pb_ratio)],
+    ['ROE', fmtPct(f.roe)],
+    ['利润率', fmtPct(f.profit_margin)],
+    ['Beta', fmtNum(f.beta)],
+    ['52周高', f['52w_high'] ? '$' + Number(f['52w_high']).toFixed(2) : '-'],
+    ['52周低', f['52w_low'] ? '$' + Number(f['52w_low']).toFixed(2) : '-'],
+    ['日均量', fmtVol(f.avg_volume)],
+    ['股息率', f.dividend_yield ? fmtPct(f.dividend_yield) : '-'],
+  ].filter(function(r) { return r[1] && r[1] !== '-' && r[1] !== ''; });
+
+  grid.innerHTML = items.map(function(r) {
+    return '<div class="flex justify-between py-1 border-b border-gray-50">' +
+      '<span class="text-gray-400">' + r[0] + '</span>' +
+      '<span class="font-medium text-gray-700">' + r[1] + '</span>' +
+    '</div>';
+  }).join('');
+}
+
 // 加载详情
 async function loadDetail() {
   try {
     stockData = await api('/api/stocks/' + STOCK_ID);
     document.getElementById('market-tag').innerHTML = marketTag(stockData.market);
     renderAlgoResults(stockData);
+    renderFundamentals(stockData.fundamentals);
     if (stockData.label) fillLabel(stockData.label);
     currentStockTags = stockData.tags || [];
     renderTagSelect();
@@ -321,20 +397,45 @@ document.addEventListener('click', function(e) {
   }
 });
 
-// 加载列表（用于上下切换）— 使用 sessionStorage 中保存的筛选条件
+// 加载列表（用于上下切换）— 根据来源使用不同的筛选条件和 API
+var detailFrom = sessionStorage.getItem('stockDetailFrom') || 'stocks';
+
 async function loadStockList() {
   try {
-    let url = '/api/stocks';
-    const params = [];
-    const saved = sessionStorage.getItem('stockFilter');
-    if (saved) {
-      const f = JSON.parse(saved);
-      if (f.tag) params.push('tag=' + encodeURIComponent(f.tag));
-      if (f.label_status) params.push('label_status=' + f.label_status);
-      if (f.market) params.push('market=' + f.market);
+    if (detailFrom === 'universe') {
+      // 从品种库进入：使用 universeFilter 和对应的 API
+      const saved = sessionStorage.getItem('universeFilter');
+      let tab = 'focused';
+      const filterDims = {};
+      let search = '';
+      if (saved) {
+        const f = JSON.parse(saved);
+        if (f.tab) tab = f.tab;
+        if (f.search) search = f.search;
+        ['dl','pt','lk','sf','ty','dn'].forEach(function(dim) { if (f[dim]) filterDims[dim] = f[dim]; });
+      }
+      const monitorTabs = new Set(['watching', 'focused', 'holding']);
+      const base = monitorTabs.has(tab) ? '/api/monitor' : '/api/universe';
+      const params = ['watch_status=' + tab, 'page_size=9999'];
+      if (search) params.push('search=' + encodeURIComponent(search));
+      Object.keys(filterDims).forEach(function(dim) { params.push(dim + '=' + encodeURIComponent(filterDims[dim])); });
+      const data = await api(base + '/stocks?' + params.join('&'));
+      stockList = data.items || [];
+    } else {
+      // 从标注列表进入
+      let url = '/api/stocks';
+      const params = ['page_size=9999'];
+      const saved = sessionStorage.getItem('stockFilter');
+      if (saved) {
+        const f = JSON.parse(saved);
+        if (f.tag) params.push('tag=' + encodeURIComponent(f.tag));
+        if (f.label_status) params.push('label_status=' + f.label_status);
+        if (f.market) params.push('market=' + f.market);
+      }
+      url += '?' + params.join('&');
+      const data = await api(url);
+      stockList = data.items || [];
     }
-    if (params.length) url += '?' + params.join('&');
-    stockList = await api(url);
   } catch(e) {}
 }
 
@@ -501,6 +602,15 @@ document.addEventListener('keydown', function(e) {
   if (e.key === 'ArrowRight' && !e.target.matches('input,select,textarea')) { e.preventDefault(); goNext(); }
   if (e.ctrlKey && e.key === 'Enter') { e.preventDefault(); saveLabel().then(goNext); }
 });
+
+// 设置返回链接
+(function() {
+  var backLink = document.getElementById('back-link');
+  if (detailFrom === 'universe') {
+    backLink.href = '/universe';
+    backLink.innerHTML = '&larr; 返回品种库';
+  }
+})();
 
 loadAllTags().then(() => loadDetail());
 loadStockList();
