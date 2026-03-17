@@ -3,19 +3,22 @@
 6状态模型:
   pending  (待入库) → idle (在库中)  → watching (关注中)  → focused (重点关注)
   focused  → holding (持仓中) → idle
-  idle/watching → removed (已移除)
 
 转移规则:
   pending → idle       : 人工确认
-  idle → watching      : 每日扫描发现形态部分满足
-  idle → removed       : 形态严重恶化或人工移除
-  watching → focused   : 形态改善 (DL=S, PT>=B, LK>=B, SF=1st, TY/DN待触发)
-  watching → idle      : 形态退化但不严重，回在库中
-  watching → removed   : 形态严重恶化
-  focused → watching   : TY走坏但LK/PT/SF仍达标
-  focused → holding    : 六维全部达标，模拟下单
+  idle → watching      : 扫描发现 DL=S, PT>=B, LK>=B, SF<=2nd
+  idle → removed       : 人工移除
+  watching → focused   : 监控发现 DL=S, PT>=A, LK>=A, SF=1st, TY>=A
+  watching → idle      : 不满足关注条件
+  watching → removed   : 人工移除
+  focused → watching   : 不满足重点条件但仍满足关注条件
+  focused → idle       : 不满足关注条件
+  focused → holding    : DL=S, PT>=A, LK>=A, SF=1st, TY>=A, DN>=A，模拟下单
+  focused → removed    : 人工移除
   holding → idle       : 平仓 (止损/止盈/手动)
   removed → idle       : 人工恢复
+
+注意: 扫描/监控任务不会自动将品种移到 removed，只有人工操作或完全无数据才会。
 """
 import logging
 from datetime import datetime
@@ -30,7 +33,7 @@ VALID_TRANSITIONS = {
     'pending': ['idle', 'removed'],
     'idle': ['watching', 'removed'],
     'watching': ['focused', 'idle', 'removed'],
-    'focused': ['watching', 'holding', 'removed'],
+    'focused': ['watching', 'holding', 'removed', 'idle'],
     'holding': ['idle'],
     'removed': ['pending'],  # 恢复只能到待入库
 }
@@ -90,25 +93,7 @@ def batch_transition(stock_ids: list, target_status: str, reason: str = "") -> d
 
 def meets_watching_criteria(stock: dict) -> bool:
     """检查是否满足从 idle 升级到 watching 的条件
-    条件: DL=S，且至少有2个其他维度 >= B
-    """
-    dl = stock.get('dl_grade')
-    if dl != 'S':
-        return False
-
-    other_grades = [
-        stock.get('pt_grade'),
-        stock.get('lk_grade'),
-        stock.get('sf_grade'),
-        stock.get('ty_grade'),
-    ]
-    good_count = sum(1 for g in other_grades if _grade_gte(g, 'B') or g in ('1st', '2nd'))
-    return good_count >= 2
-
-
-def meets_focused_criteria(stock: dict) -> bool:
-    """检查是否满足从 watching 升级到 focused 的条件
-    条件: DL=S, PT>=B, LK>=B, SF=1st, TY/DN 可以待定
+    条件: DL=S, PT>=B, LK>=B, SF<=2nd (即 1st 或 2nd)
     """
     if stock.get('dl_grade') != 'S':
         return False
@@ -121,9 +106,9 @@ def meets_focused_criteria(stock: dict) -> bool:
     return True
 
 
-def meets_order_criteria(stock: dict) -> bool:
-    """检查是否满足下单条件（从 focused 到 holding）
-    条件: DL=S, PT>=A, LK>=A, SF=1st, TY>=B, DN>=B
+def meets_focused_criteria(stock: dict) -> bool:
+    """检查是否满足从 watching 升级到 focused 的条件
+    条件: DL=S, PT>=A, LK>=A, SF=1st, TY>=A
     """
     if stock.get('dl_grade') != 'S':
         return False
@@ -133,9 +118,26 @@ def meets_order_criteria(stock: dict) -> bool:
         return False
     if stock.get('sf_grade') != '1st':
         return False
-    if not _grade_gte(stock.get('ty_grade'), 'B'):
+    if not _grade_gte(stock.get('ty_grade'), 'A'):
         return False
-    if not _grade_gte(stock.get('dn_grade'), 'B'):
+    return True
+
+
+def meets_order_criteria(stock: dict) -> bool:
+    """检查是否满足下单条件（从 focused 到 holding）
+    条件: DL=S, PT>=A, LK>=A, SF=1st, TY>=A, DN>=A
+    """
+    if stock.get('dl_grade') != 'S':
+        return False
+    if not _grade_gte(stock.get('pt_grade'), 'A'):
+        return False
+    if not _grade_gte(stock.get('lk_grade'), 'A'):
+        return False
+    if stock.get('sf_grade') != '1st':
+        return False
+    if not _grade_gte(stock.get('ty_grade'), 'A'):
+        return False
+    if not _grade_gte(stock.get('dn_grade'), 'A'):
         return False
     return True
 
@@ -153,9 +155,9 @@ def is_deteriorated(stock: dict) -> bool:
 
 def is_downgraded(stock: dict) -> bool:
     """检查 watching 是否应降级回 idle
-    条件: 不满足 watching 条件但也没严重恶化
+    条件: 不满足 watching 条件 (DL!=S 或 PT<B 或 LK<B)
     """
-    return not meets_watching_criteria(stock) and not is_deteriorated(stock)
+    return not meets_watching_criteria(stock)
 
 
 def get_stocks_by_watch_status(status: str) -> list:
@@ -174,12 +176,12 @@ def get_stocks_by_watch_status(status: str) -> list:
 
 
 def get_effective_grades(stock: dict) -> dict:
-    """获取有效评级（优先用系统分析结果，其次用人工标注）"""
+    """获取有效评级（优先用人工标注，其次用系统分析结果）"""
     return {
-        'dl_grade': stock.get('dl_grade') or stock.get('label_dl'),
-        'pt_grade': stock.get('pt_grade') or stock.get('label_pt'),
-        'lk_grade': stock.get('lk_grade') or stock.get('label_lk'),
-        'sf_grade': stock.get('sf_grade') or stock.get('label_sf'),
-        'ty_grade': stock.get('ty_grade') or stock.get('label_ty'),
-        'dn_grade': stock.get('dn_grade') or stock.get('label_dn'),
+        'dl_grade': stock.get('label_dl') or stock.get('dl_grade'),
+        'pt_grade': stock.get('label_pt') or stock.get('pt_grade'),
+        'lk_grade': stock.get('label_lk') or stock.get('lk_grade'),
+        'sf_grade': stock.get('label_sf') or stock.get('sf_grade'),
+        'ty_grade': stock.get('label_ty') or stock.get('ty_grade'),
+        'dn_grade': stock.get('label_dn') or stock.get('dn_grade'),
     }

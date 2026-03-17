@@ -6,9 +6,13 @@
 """
 import os
 import time
+import logging
+import traceback
 import pandas as pd
 from datetime import datetime, timedelta
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 
 # ─── API 请求节流 ───
@@ -128,8 +132,7 @@ def fetch_kline_smart(symbol: str,
             # 本地数据已覆盖截止日期，直接截取
             if local_end >= end_dt:
                 result = local_df[local_df.index <= end_dt].tail(bars)
-                print(f"使用本地缓存: {cache_file} ({len(local_df)}根)")
-                print(f"  截取 {len(result)} 根 (截至 {end_dt.strftime('%Y-%m-%d')})")
+                logger.info(f"使用本地缓存: {cache_file} ({len(local_df)}根), 截取 {len(result)} 根")
                 return result
 
             # 有缓存但不够新 → 增量拉取
@@ -142,35 +145,31 @@ def fetch_kline_smart(symbol: str,
                 period = '6mo'
 
             yahoo_sym = _to_yahoo_symbol(symbol, market)
-            print(f"增量拉取 {yahoo_sym} (缓存差 {gap_days} 天, range={period}) ...")
-            new_df = _fetch_yahoo(yahoo_sym, period=period)
+            logger.info(f"增量拉取 {yahoo_sym} (缓存差 {gap_days} 天, range={period}) ...")
+            new_df = _fetch_hk_us(yahoo_sym, period=period)
             if new_df is not None and not new_df.empty:
                 merged = pd.concat([local_df, new_df])
                 merged = merged[~merged.index.duplicated(keep='last')].sort_index()
-                print(f"  增量 {len(new_df)} 根, 合并后 {len(merged)} 根")
+                logger.info(f"  增量 {len(new_df)} 根, 合并后 {len(merged)} 根")
             else:
                 merged = local_df
-                print(f"  增量获取失败, 使用本地 {len(merged)} 根")
+                logger.warning(f"  增量获取失败, 使用本地 {len(merged)} 根")
 
             save_to_csv(merged, str(cache_file))
             result = merged[merged.index <= end_dt].tail(bars)
-            print(f"数据就绪: {len(result)} 根小时K线")
-            if len(result) > 0:
-                print(f"  范围: {result.index[0]} ~ {result.index[-1]}")
+            logger.info(f"数据就绪: {symbol} {len(result)} 根小时K线")
             return result
 
         # 无缓存 → 全量拉取
         yahoo_sym = _to_yahoo_symbol(symbol, market)
-        print(f"通过 Yahoo Finance 获取 {yahoo_sym} ...")
-        merged = _fetch_yahoo(yahoo_sym, period='6mo')
+        logger.info(f"全量拉取 {yahoo_sym} ...")
+        merged = _fetch_hk_us(yahoo_sym, period='6mo')
         if merged is None or merged.empty:
-            raise ValueError(f"未能获取到 {symbol} 的有效数据")
+            raise ValueError(f"未能获取到 {symbol} 的有效数据 (Yahoo v8 + yfinance 均失败)")
 
         save_to_csv(merged, str(cache_file))
         result = merged[merged.index <= end_dt].tail(bars)
-        print(f"数据就绪: {len(result)} 根小时K线")
-        if len(result) > 0:
-            print(f"  范围: {result.index[0]} ~ {result.index[-1]}")
+        logger.info(f"数据就绪: {symbol} {len(result)} 根小时K线")
         return result
 
     # ─── A股：原有逻辑 ───
@@ -193,49 +192,47 @@ def fetch_kline_smart(symbol: str,
         # 本地数据已覆盖截止日期，直接截取
         if local_end >= end_dt:
             result = local_df[local_df.index <= end_dt].tail(bars)
-            print(f"使用本地缓存: {cache_file} ({len(local_df)}根)")
-            print(f"  截取 {len(result)} 根 (截至 {end_dt.strftime('%Y-%m-%d')})")
+            logger.info(f"使用本地缓存: {cache_file} ({len(local_df)}根), 截取 {len(result)} 根")
             return result
 
         # 本地数据不够新 → 判断是否需要增量拉取
-        # 如果差距很小（3天内），可能是周末/节假日，尝试增量但容忍失败
         gap_days = (end_dt - local_end).days
         incr_start = local_end + timedelta(hours=1)
         incr_start_str = incr_start.strftime('%Y-%m-%d %H:%M:%S')
         end_str = end_dt.strftime('%Y-%m-%d %H:%M:%S')
 
-        print(f"本地缓存截至 {local_end.strftime('%Y-%m-%d %H:%M')}，增量拉取...")
+        logger.info(f"本地缓存截至 {local_end.strftime('%Y-%m-%d %H:%M')}，增量拉取...")
         try:
             new_df = _fetch_cn(symbol, incr_start_str, end_str)
             if new_df is not None and not new_df.empty:
                 merged = pd.concat([local_df, new_df])
                 merged = merged[~merged.index.duplicated(keep='last')].sort_index()
-                print(f"  增量获取 {len(new_df)} 根，合并后共 {len(merged)} 根")
+                logger.info(f"  增量获取 {len(new_df)} 根，合并后共 {len(merged)} 根")
             else:
                 merged = local_df
-                print(f"  无新增数据，使用本地 {len(merged)} 根")
+                logger.info(f"  无新增数据，使用本地 {len(merged)} 根")
         except Exception as e:
-            print(f"  增量拉取失败: {e}，使用本地数据")
+            logger.warning(f"  增量拉取失败: {e}，使用本地数据")
             merged = local_df
 
         # 同时检查是否需要往前补数据
         if local_start > start_dt:
             prepend_end_str = (local_start - timedelta(hours=1)).strftime('%Y-%m-%d %H:%M:%S')
             prepend_start_str = start_dt.strftime('%Y-%m-%d %H:%M:%S')
-            print(f"  向前补充数据: {prepend_start_str} ~ {prepend_end_str}")
+            logger.info(f"  向前补充数据: {prepend_start_str} ~ {prepend_end_str}")
             try:
                 old_df = _fetch_cn(symbol, prepend_start_str, prepend_end_str)
                 if old_df is not None and not old_df.empty:
                     merged = pd.concat([old_df, merged])
                     merged = merged[~merged.index.duplicated(keep='last')].sort_index()
-                    print(f"  向前补充 {len(old_df)} 根，合并后共 {len(merged)} 根")
+                    logger.info(f"  向前补充 {len(old_df)} 根，合并后共 {len(merged)} 根")
             except Exception as e:
-                print(f"  向前补充失败: {e}")
+                logger.warning(f"  向前补充失败: {e}")
     else:
         # 无本地缓存 → 全量拉取
         start_str = start_dt.strftime('%Y-%m-%d %H:%M:%S')
         end_str = end_dt.strftime('%Y-%m-%d %H:%M:%S')
-        print(f"无本地缓存，全量拉取 {symbol}...")
+        logger.info(f"无本地缓存，全量拉取 {symbol}...")
         merged = _fetch_cn(symbol, start_str, end_str)
 
     if merged is None or merged.empty:
@@ -246,9 +243,7 @@ def fetch_kline_smart(symbol: str,
 
     # 截取截止日期前最近 bars 根
     result = merged[merged.index <= end_dt].tail(bars)
-    print(f"数据就绪: {len(result)} 根小时K线")
-    if len(result) > 0:
-        print(f"  范围: {result.index[0]} ~ {result.index[-1]}")
+    logger.info(f"数据就绪: {symbol} {len(result)} 根小时K线")
 
     return result
 
@@ -264,8 +259,8 @@ def _fetch_cn(symbol: str, start_date: str, end_date: str) -> pd.DataFrame:
         return df
     except Exception as e:
         ak_err = str(e)
-        print(f"  akshare 获取失败: {ak_err}")
-        print("  尝试备用数据源 (Sina Finance)...")
+        logger.warning(f"  akshare 获取 {symbol} 失败: {ak_err}")
+        logger.info("  尝试备用数据源 (Sina Finance)...")
 
     # 回退到 Sina Finance API
     try:
@@ -278,11 +273,11 @@ def _fetch_cn(symbol: str, start_date: str, end_date: str) -> pd.DataFrame:
         if df is not None and not df.empty:
             df = df[(df.index >= start_dt) & (df.index <= end_dt)]
             if not df.empty:
-                print(f"  Sina Finance 获取 {len(df)} 根")
+                logger.info(f"  Sina Finance 获取 {symbol} {len(df)} 根")
                 return df
         raise ValueError("Sina Finance 未返回有效数据")
     except Exception as e2:
-        raise Exception(f"所有数据源均失败。akshare: {ak_err} | Sina: {e2}")
+        raise Exception(f"所有数据源均失败 [{symbol}]。akshare: {ak_err} | Sina: {e2}")
 
 
 def _fetch_via_akshare(symbol: str, start_date: str, end_date: str) -> pd.DataFrame:
@@ -397,7 +392,6 @@ def _to_yahoo_symbol(symbol: str, market: str) -> str:
 def _fetch_yahoo(yahoo_symbol: str, period: str = '6mo') -> pd.DataFrame:
     """通过 Yahoo Finance v8 API 获取小时K线"""
     import requests
-    import json
 
     _throttle('yahoo')
     url = f'https://query1.finance.yahoo.com/v8/finance/chart/{yahoo_symbol}'
@@ -434,8 +428,63 @@ def _fetch_yahoo(yahoo_symbol: str, period: str = '6mo') -> pd.DataFrame:
     df.dropna(subset=['Open', 'High', 'Low', 'Close'], how='all', inplace=True)
     df.sort_index(inplace=True)
 
-    print(f"  Yahoo Finance 获取 {len(df)} 根")
+    logger.info(f"  Yahoo Finance v8 获取 {yahoo_symbol} {len(df)} 根")
     return df
+
+
+def _fetch_yahoo_via_yfinance(yahoo_symbol: str, period: str = '6mo') -> pd.DataFrame:
+    """通过 yfinance 库获取小时K线（Yahoo v8 API 备用）"""
+    import yfinance as yf
+
+    _throttle('yfinance')
+    ticker = yf.Ticker(yahoo_symbol)
+    df = ticker.history(period=period, interval='1h')
+
+    if df is None or df.empty:
+        raise ValueError(f"yfinance 未返回 {yahoo_symbol} 数据")
+
+    # yfinance 返回的列名可能是首字母大写也可能小写，统一处理
+    col_map = {}
+    for col in df.columns:
+        if col.lower() == 'open':
+            col_map[col] = 'Open'
+        elif col.lower() == 'high':
+            col_map[col] = 'High'
+        elif col.lower() == 'low':
+            col_map[col] = 'Low'
+        elif col.lower() == 'close':
+            col_map[col] = 'Close'
+        elif col.lower() == 'volume':
+            col_map[col] = 'Volume'
+    if col_map:
+        df.rename(columns=col_map, inplace=True)
+
+    df = df[['Open', 'High', 'Low', 'Close', 'Volume']]
+    df.index.name = 'datetime'
+    for col in df.columns:
+        df[col] = pd.to_numeric(df[col], errors='coerce')
+    df.dropna(subset=['Open', 'High', 'Low', 'Close'], how='all', inplace=True)
+    df.sort_index(inplace=True)
+
+    logger.info(f"  yfinance 获取 {yahoo_symbol} {len(df)} 根")
+    return df
+
+
+def _fetch_hk_us(yahoo_symbol: str, period: str = '6mo') -> pd.DataFrame:
+    """港股/美股K线获取 — Yahoo v8 优先，yfinance 备用"""
+    # 先尝试 Yahoo v8 直接 API
+    try:
+        return _fetch_yahoo(yahoo_symbol, period=period)
+    except Exception as e:
+        logger.warning(f"  Yahoo v8 获取 {yahoo_symbol} 失败: {e}")
+
+    # 备用：yfinance 库
+    try:
+        return _fetch_yahoo_via_yfinance(yahoo_symbol, period=period)
+    except Exception as e2:
+        logger.error(f"  yfinance 获取 {yahoo_symbol} 也失败: {e2}\n{traceback.format_exc()}")
+
+    return None
 
 def load_from_csv(filepath: str) -> pd.DataFrame:
     """从 CSV 文件加载标准 OHLCV 数据"""
@@ -491,10 +540,11 @@ def _get_cn_stock_name(symbol: str) -> str:
 
 def _get_yahoo_stock_name(symbol: str, market: str) -> str:
     """通过 Yahoo Finance 获取港股/美股名称"""
+    yahoo_sym = _to_yahoo_symbol(symbol, market)
+    # 先尝试 Yahoo v8 API
     try:
         import requests
         _throttle('yahoo')
-        yahoo_sym = _to_yahoo_symbol(symbol, market)
         url = f'https://query1.finance.yahoo.com/v8/finance/chart/{yahoo_sym}'
         params = {'range': '1d', 'interval': '1d'}
         headers = {'User-Agent': 'Mozilla/5.0'}
@@ -505,7 +555,19 @@ def _get_yahoo_stock_name(symbol: str, market: str) -> str:
             if result:
                 meta = result[0].get('meta', {})
                 name = meta.get('longName') or meta.get('shortName') or ''
-                return name
+                if name:
+                    return name
+    except Exception:
+        pass
+    # 备用：yfinance 库
+    try:
+        import yfinance as yf
+        _throttle('yfinance')
+        ticker = yf.Ticker(yahoo_sym)
+        info = getattr(ticker, 'info', {}) or {}
+        name = info.get('longName') or info.get('shortName') or ''
+        if name:
+            return name
     except Exception:
         pass
     return ""

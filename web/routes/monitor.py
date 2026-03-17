@@ -13,6 +13,7 @@ router = APIRouter(prefix="/api/monitor", tags=["monitor"])
 def list_monitor_stocks(
     watch_status: Optional[str] = Query(None),
     search: Optional[str] = Query(None),
+    market: Optional[str] = Query(None),
     dl: Optional[str] = Query(None),
     pt: Optional[str] = Query(None),
     lk: Optional[str] = Query(None),
@@ -39,6 +40,10 @@ def list_monitor_stocks(
             conditions.append("(s.symbol LIKE ? OR s.symbol_name LIKE ?)")
             params.extend([f"%{search}%", f"%{search}%"])
 
+        if market:
+            conditions.append("s.market = ?")
+            params.append(market)
+
         # 各维度评级筛选
         _grade_map = {'S': ('S',), 'A': ('S', 'A'), 'B': ('S', 'A', 'B')}
         _sf_map = {'1st': ('1st',), '2nd': ('1st', '2nd')}
@@ -61,12 +66,12 @@ def list_monitor_stocks(
         rows = conn.execute(f"""
             SELECT s.id, s.symbol, s.symbol_name, s.market, s.watch_status,
                    s.last_price, s.last_price_time, s.news_alert,
-                   COALESCE(s.dl_grade, l.dl_grade) as dl_grade,
-                   COALESCE(s.pt_grade, l.pt_grade) as pt_grade,
-                   COALESCE(s.lk_grade, l.lk_grade) as lk_grade,
-                   COALESCE(s.sf_grade, l.sf_grade) as sf_grade,
-                   COALESCE(s.ty_grade, l.ty_grade) as ty_grade,
-                   COALESCE(s.dn_grade, l.dn_grade) as dn_grade,
+                   COALESCE(l.dl_grade, s.dl_grade) as dl_grade,
+                   COALESCE(l.pt_grade, s.pt_grade) as pt_grade,
+                   COALESCE(l.lk_grade, s.lk_grade) as lk_grade,
+                   COALESCE(l.sf_grade, s.sf_grade) as sf_grade,
+                   COALESCE(l.ty_grade, s.ty_grade) as ty_grade,
+                   COALESCE(l.dn_grade, s.dn_grade) as dn_grade,
                    s.analyzed_at, s.updated_at
             FROM stocks s
             LEFT JOIN labels l ON l.stock_id = s.id

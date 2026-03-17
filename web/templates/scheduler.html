@@ -84,6 +84,25 @@
       <input type="number" id="trigger-minutes" class="w-full" min="1" value="5">
     </div>
     <div id="cron-fields" class="mb-3 hidden">
+      <div class="mb-3">
+        <label class="block text-sm font-medium text-gray-700 mb-1">重复频率</label>
+        <select id="trigger-cron-freq" class="w-full" onchange="toggleCronDow()">
+          <option value="daily">每天</option>
+          <option value="weekly">每周</option>
+        </select>
+      </div>
+      <div id="cron-dow-field" class="mb-3 hidden">
+        <label class="block text-sm font-medium text-gray-700 mb-1">星期</label>
+        <select id="trigger-dow" class="w-full">
+          <option value="mon">周一</option>
+          <option value="tue">周二</option>
+          <option value="wed">周三</option>
+          <option value="thu">周四</option>
+          <option value="fri">周五</option>
+          <option value="sat">周六</option>
+          <option value="sun">周日</option>
+        </select>
+      </div>
       <div class="grid grid-cols-2 gap-3">
         <div>
           <label class="block text-sm font-medium text-gray-700 mb-1">小时</label>
@@ -173,10 +192,16 @@ let jobsCache = {};
 let jobsList = [];
 let logPageSize = parseInt(localStorage.getItem('schedulerLogPageSize')) || 20;
 
+var _DOW_LABELS = {mon:'周一',tue:'周二',wed:'周三',thu:'周四',fri:'周五',sat:'周六',sun:'周日'};
+
 function formatTrigger(job) {
   const a = job.trigger_args || {};
   if (job.trigger === 'cron') {
-    return '每天 ' + String(a.hour||0).padStart(2,'0') + ':' + String(a.minute||0).padStart(2,'0');
+    var time = String(a.hour||0).padStart(2,'0') + ':' + String(a.minute||0).padStart(2,'0');
+    if (a.day_of_week) {
+      return '每' + (_DOW_LABELS[a.day_of_week] || a.day_of_week) + ' ' + time;
+    }
+    return '每天 ' + time;
   }
   if (job.trigger === 'interval') {
     if (a.minutes) return '每 ' + a.minutes + ' 分钟';
@@ -365,6 +390,13 @@ function openTriggerModal(jobId) {
   } else {
     document.getElementById('trigger-hour').value = args.hour || 0;
     document.getElementById('trigger-minute').value = args.minute || 0;
+    if (args.day_of_week) {
+      document.getElementById('trigger-cron-freq').value = 'weekly';
+      document.getElementById('trigger-dow').value = args.day_of_week;
+    } else {
+      document.getElementById('trigger-cron-freq').value = 'daily';
+    }
+    toggleCronDow();
   }
   toggleTriggerFields();
   document.getElementById('trigger-modal').classList.remove('hidden');
@@ -381,6 +413,11 @@ function toggleTriggerFields() {
   document.getElementById('cron-fields').classList.toggle('hidden', type !== 'cron');
 }
 
+function toggleCronDow() {
+  var freq = document.getElementById('trigger-cron-freq').value;
+  document.getElementById('cron-dow-field').classList.toggle('hidden', freq !== 'weekly');
+}
+
 async function saveTrigger() {
   if (!editingJobId) return;
   var type = document.getElementById('trigger-type').value;
@@ -393,6 +430,10 @@ async function saveTrigger() {
     var hour = parseInt(document.getElementById('trigger-hour').value) || 0;
     var minute = parseInt(document.getElementById('trigger-minute').value) || 0;
     args = { hour: hour, minute: minute };
+    var freq = document.getElementById('trigger-cron-freq').value;
+    if (freq === 'weekly') {
+      args.day_of_week = document.getElementById('trigger-dow').value;
+    }
   }
 
   try {

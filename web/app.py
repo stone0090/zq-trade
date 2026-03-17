@@ -2,7 +2,8 @@
 import sys
 from pathlib import Path
 from datetime import datetime
-from fastapi import FastAPI, Request
+from typing import Optional
+from fastapi import FastAPI, Request, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
@@ -79,13 +80,14 @@ def page_home(request: Request):
 
 
 @app.get("/stocks/{stock_id}", response_class=HTMLResponse)
-def page_stock_detail(request: Request, stock_id: str):
+def page_stock_detail(request: Request, stock_id: str, from_page: Optional[str] = None):
     with get_db() as conn:
         stock = conn.execute("SELECT * FROM stocks WHERE id=?", (stock_id,)).fetchone()
     if not stock:
         return HTMLResponse("<h1>股票不存在</h1>", status_code=404)
+    active_page = "universe" if from_page == "universe" else "stocks"
     return templates.TemplateResponse("stock_detail.html", {
-        "request": request, "active_page": "stocks",
+        "request": request, "active_page": active_page,
         "stock": dict(stock),
         "now": int(datetime.now().timestamp()),
     })

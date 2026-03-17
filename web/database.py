@@ -217,9 +217,13 @@ def init_db():
                 job_id TEXT PRIMARY KEY,
                 custom_name TEXT,
                 custom_description TEXT,
-                sort_order INTEGER DEFAULT 0
+                sort_order INTEGER DEFAULT 0,
+                paused INTEGER DEFAULT 0
             )
         """)
+
+        # 增量迁移：为 job_config 添加 paused 列
+        _ensure_column(conn, 'job_config', 'paused', 'INTEGER DEFAULT 0')
 
 
 def _migrate_from_batches(conn):
@@ -525,6 +529,13 @@ def _migrate_symbol_unique_to_compound(conn):
 
     conn.execute("PRAGMA foreign_keys=ON")
     print("  迁移完成！")
+
+
+def _ensure_column(conn, table: str, column: str, col_def: str):
+    """通用增量迁移：确保某张表有某个列，没有则添加"""
+    cols = [r['name'] for r in conn.execute(f"PRAGMA table_info({table})").fetchall()]
+    if column not in cols:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {col_def}")
 
 
 def _ensure_watch_status_columns(conn):

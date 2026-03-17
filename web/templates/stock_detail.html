@@ -44,6 +44,7 @@
         <span class="text-gray-500 font-normal ml-2">{{ stock.symbol_name }}</span>
       </h1>
       <span id="market-tag"></span>
+      <span id="effective-grades" class="flex items-center gap-1 ml-2"></span>
     </div>
     <div class="flex items-center gap-2">
       <button class="btn btn-ghost btn-sm" onclick="reanalyze()" id="btn-reanalyze" title="重新分析此股票">重新分析</button>
@@ -261,6 +262,7 @@ async function loadDetail() {
   try {
     stockData = await api('/api/stocks/' + STOCK_ID);
     document.getElementById('market-tag').innerHTML = marketTag(stockData.market);
+    renderEffectiveGrades(stockData);
     renderAlgoResults(stockData);
     renderFundamentals(stockData.fundamentals);
     if (stockData.label) fillLabel(stockData.label);
@@ -437,6 +439,17 @@ async function loadStockList() {
       stockList = data.items || [];
     }
   } catch(e) {}
+}
+
+function renderEffectiveGrades(data) {
+  // 显示有效评级（人工优先>算法），与列表保持一致
+  const dims = ['dl','pt','lk','sf','ty','dn'];
+  const labels = {dl:'DL',pt:'PT',lk:'LK',sf:'SF',ty:'TY',dn:'DN'};
+  const el = document.getElementById('effective-grades');
+  el.innerHTML = dims.map(d => {
+    const grade = data[d + '_grade'] || '-';
+    return '<span class="text-xs">' + labels[d] + ':' + gradeTag(grade) + '</span>';
+  }).join('');
 }
 
 function renderAlgoResults(data) {

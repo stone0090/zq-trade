@@ -96,6 +96,7 @@ def _trigger_background_analysis(stock_id: str, symbol: str):
 def list_universe_stocks(
     watch_status: Optional[str] = Query(None),
     search: Optional[str] = Query(None),
+    market: Optional[str] = Query(None),
     dl: Optional[str] = Query(None),
     pt: Optional[str] = Query(None),
     lk: Optional[str] = Query(None),
@@ -122,6 +123,10 @@ def list_universe_stocks(
             conditions.append("(s.symbol LIKE ? OR s.symbol_name LIKE ?)")
             params.extend([f"%{search}%", f"%{search}%"])
 
+        if market:
+            conditions.append("s.market = ?")
+            params.append(market)
+
         # 各维度评级筛选
         _grade_map = {'S': ('S',), 'A': ('S', 'A'), 'B': ('S', 'A', 'B')}
         _sf_map = {'1st': ('1st',), '2nd': ('1st', '2nd')}
@@ -145,12 +150,12 @@ def list_universe_stocks(
             SELECT s.id, s.symbol, s.symbol_name, s.market, s.watch_status,
                    s.source_type, s.last_price, s.last_price_time,
                    s.fundamental_json, s.news_alert, s.status,
-                   COALESCE(s.dl_grade, l.dl_grade) as dl_grade,
-                   COALESCE(s.pt_grade, l.pt_grade) as pt_grade,
-                   COALESCE(s.lk_grade, l.lk_grade) as lk_grade,
-                   COALESCE(s.sf_grade, l.sf_grade) as sf_grade,
-                   COALESCE(s.ty_grade, l.ty_grade) as ty_grade,
-                   COALESCE(s.dn_grade, l.dn_grade) as dn_grade,
+                   COALESCE(l.dl_grade, s.dl_grade) as dl_grade,
+                   COALESCE(l.pt_grade, s.pt_grade) as pt_grade,
+                   COALESCE(l.lk_grade, s.lk_grade) as lk_grade,
+                   COALESCE(l.sf_grade, s.sf_grade) as sf_grade,
+                   COALESCE(l.ty_grade, s.ty_grade) as ty_grade,
+                   COALESCE(l.dn_grade, s.dn_grade) as dn_grade,
                    s.analyzed_at, s.created_at, s.updated_at
             FROM stocks s
             LEFT JOIN labels l ON l.stock_id = s.id
@@ -362,15 +367,27 @@ def create_mock_data():
             ).fetchone()
             if existing:
                 sid = existing['id']
-                conn.execute("""
-                    UPDATE stocks SET symbol_name=?, market=?, watch_status=?,
-                        last_price=?, dl_grade=?, pt_grade=?, lk_grade=?,
-                        sf_grade=?, ty_grade=?, dn_grade=?, updated_at=?,
-                        status='completed', analyzed_at=?
-                    WHERE id=?
-                """, (ms["name"], ms["market"], ms["ws"], ms["price"],
-                      ms["dl"], ms["pt"], ms["lk"], ms["sf"], ms["ty"], ms["dn"],
-                      now, now, sid))
+                # 只更新名称/市场/价格/状态，不覆盖已有的分析评级
+                has_analysis = conn.execute(
+                    "SELECT score_card_json FROM stocks WHERE id=? AND score_card_json IS NOT NULL AND score_card_json != ''",
+                    (sid,)
+                ).fetchone()
+                if has_analysis:
+                    conn.execute("""
+                        UPDATE stocks SET symbol_name=?, market=?, watch_status=?,
+                            last_price=?, updated_at=?, status='completed', analyzed_at=?
+                        WHERE id=?
+                    """, (ms["name"], ms["market"], ms["ws"], ms["price"], now, now, sid))
+                else:
+                    conn.execute("""
+                        UPDATE stocks SET symbol_name=?, market=?, watch_status=?,
+                            last_price=?, dl_grade=?, pt_grade=?, lk_grade=?,
+                            sf_grade=?, ty_grade=?, dn_grade=?, updated_at=?,
+                            status='completed', analyzed_at=?
+                        WHERE id=?
+                    """, (ms["name"], ms["market"], ms["ws"], ms["price"],
+                          ms["dl"], ms["pt"], ms["lk"], ms["sf"], ms["ty"], ms["dn"],
+                          now, now, sid))
             else:
                 sid = str(uuid.uuid4())
                 conn.execute("""

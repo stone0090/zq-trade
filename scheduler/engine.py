@@ -21,7 +21,7 @@ JOB_DEFINITIONS = {
     "daily_scan": {
         "name": "在库品种扫描",
         "trigger": "cron",
-        "trigger_args": {"hour": 8, "minute": 0},
+        "trigger_args": {"day_of_week": "sat", "hour": 8, "minute": 0},
         "func": "scheduler.jobs:daily_scan",
         "enabled": True,
     },
@@ -81,6 +81,22 @@ def _log_job_event(event):
         logger.warning(f"记录任务日志失败: {e}")
 
 
+def _restore_pause_states():
+    """服务启动后，从 job_config.paused 恢复暂停状态"""
+    try:
+        with get_db() as conn:
+            rows = conn.execute(
+                "SELECT job_id FROM job_config WHERE paused = 1"
+            ).fetchall()
+        for r in rows:
+            job_id = r['job_id']
+            if _scheduler and _scheduler.get_job(job_id):
+                _scheduler.pause_job(job_id)
+                logger.info(f"恢复暂停状态: {job_id}")
+    except Exception as e:
+        logger.warning(f"恢复暂停状态失败: {e}")
+
+
 def start_scheduler():
     """启动定时任务调度器"""
     global _scheduler
@@ -109,6 +125,10 @@ def start_scheduler():
         )
 
     _scheduler.start()
+
+    # 恢复持久化的暂停状态
+    _restore_pause_states()
+
     logger.info(f"定时任务引擎启动，{sum(1 for d in JOB_DEFINITIONS.values() if d['enabled'])} 个任务已注册")
 
 
@@ -127,9 +147,9 @@ def get_scheduler() -> Optional[BackgroundScheduler]:
 # ─── 默认任务描述 ───
 
 _DEFAULT_DESCRIPTIONS = {
-    "daily_scan": "每天08:00扫描「在库中」(idle)品种池：\n1. 先增量获取每只股票最新价格和K线数据\n2. 获取六维有效评级（系统评级优先，无则取人工标注）\n3. 形态严重恶化（DL非S 或 PT+LK同时为C）→ 移除\n4. 满足关注条件（DL=S 且至少2个其他维度≥B）→ 升级到「关注中」\n5. 升级或移除时发送通知",
-    "focus_monitor": "每5分钟检查「重点关注」(focused)品种：\n1. 先增量获取每只股票最新价格和K线数据\n2. 六维全部达标（DL=S, PT≥A, LK≥A, SF=1st, TY≥B, DN≥B）→ 执行模拟下单并转入「持仓中」\n3. TY走坏(=C)但其他维度仍满足关注条件 → 降级回「关注中」\n4. 触发下单或降级时发送通知",
-    "watch_monitor": "每1小时检查「关注中」(watching)品种：\n1. 先增量获取每只股票最新价格和K线数据\n2. 形态严重恶化（DL非S 或 PT+LK同时为C）→ 移除\n3. 形态改善满足重点条件（DL=S, PT≥B, LK≥B, SF=1st）→ 升级到「重点关注」\n4. 形态退化不满足关注条件 → 降级回「在库中」\n5. 升降级时发送通知",
+    "daily_scan": "每周六08:00扫描「在库中」(idle)品种池：\n1. 先增量获取每只股票最新价格和K线数据\n2. 获取六维有效评级（系统评级优先，无则取人工标注）\n3. 满足关注条件（DL=S, PT≥B, LK≥B, SF≤2nd）→ 升级到「关注中」\n4. 完全无数据品种（无名称+无评级+无价格）→ 自动移除\n5. 有变动时发送通知",
+    "focus_monitor": "每5分钟检查「重点关注」(focused)品种：\n1. 先增量获取每只股票最新价格和K线数据\n2. 六维全部达标（DL=S, PT≥A, LK≥A, SF=1st, TY≥A, DN≥A）→ 执行模拟下单并转入「持仓中」\n3. 不满足重点条件（DL=S, PT≥A, LK≥A, SF=1st, TY≥A）但仍满足关注条件 → 降级回「关注中」\n4. 连关注条件都不满足 → 降级回「在库中」\n5. 触发下单或降级时发送通知",
+    "watch_monitor": "每1小时检查「关注中」(watching)品种：\n1. 先增量获取每只股票最新价格和K线数据\n2. 满足重点条件（DL=S, PT≥A, LK≥A, SF=1st, TY≥A）→ 升级到「重点关注」\n3. 不满足关注条件（DL=S, PT≥B, LK≥B, SF≤2nd）→ 降级回「在库中」\n4. 不会自动移除品种，仅做升降级\n5. 升降级时发送通知",
     "news_collect": "每30分钟采集监控品种相关新闻：\n1. 获取「关注中」「重点关注」「持仓中」三个状态的品种\n2. 通过Yahoo Finance获取每只品种最新5条新闻\n3. 关键词异动检测（earnings/acquisition/merger/财报/并购/回购等）\n4. 新增新闻保存到数据库（自动去重）\n5. 检测到异动新闻时标记news_alert并发送通知",
     "daily_report": "每天16:30收盘后推送日报：\n1. 汇总「重点关注」「关注中」「持仓中」品种数量\n2. 统计累计交易数、胜率、总盈亏、最大回撤\n3. 列出每只持仓的浮动盈亏金额和百分比\n4. 通过配置的通知渠道（飞书/企微等）推送卡片消息",
 }
@@ -193,6 +213,7 @@ def get_all_jobs_status() -> list[dict]:
 def pause_job(job_id: str) -> bool:
     if _scheduler and _scheduler.get_job(job_id):
         _scheduler.pause_job(job_id)
+        _persist_pause_state(job_id, True)
         logger.info(f"任务 {job_id} 已暂停")
         return True
     return False
@@ -201,9 +222,28 @@ def pause_job(job_id: str) -> bool:
 def resume_job(job_id: str) -> bool:
     if _scheduler and _scheduler.get_job(job_id):
         _scheduler.resume_job(job_id)
+        _persist_pause_state(job_id, False)
         logger.info(f"任务 {job_id} 已恢复")
         return True
     return False
+
+
+def _persist_pause_state(job_id: str, paused: bool):
+    """将暂停状态持久化到 job_config 表"""
+    try:
+        with get_db() as conn:
+            existing = conn.execute(
+                "SELECT job_id FROM job_config WHERE job_id=?", (job_id,)
+            ).fetchone()
+            if existing:
+                conn.execute("UPDATE job_config SET paused=? WHERE job_id=?", (1 if paused else 0, job_id))
+            else:
+                conn.execute(
+                    "INSERT INTO job_config (job_id, paused, sort_order) VALUES (?,?,?)",
+                    (job_id, 1 if paused else 0, 999)
+                )
+    except Exception as e:
+        logger.warning(f"持久化暂停状态失败: {e}")
 
 
 def run_job_now(job_id: str) -> bool:

@@ -159,7 +159,8 @@ function renderActions(s) {
     btns.push(`<button class="btn btn-success btn-sm" onclick="upgradeStock('${s.id}','focused')">升级重点</button>`);
     btns.push(`<button class="btn btn-danger btn-sm" onclick="removeStock('${s.id}')">移除</button>`);
   } else if (ws === 'focused') {
-    btns.push(`<button class="btn btn-ghost btn-sm" onclick="downgradeStock('${s.id}','watching')">降级扫描</button>`);
+    btns.push(`<button class="btn btn-ghost btn-sm" onclick="downgradeStock('${s.id}','watching')">降级关注</button>`);
+    btns.push(`<button class="btn btn-ghost btn-sm" onclick="downgradeStock('${s.id}','idle')">回库</button>`);
     btns.push(`<button class="btn btn-danger btn-sm" onclick="removeStock('${s.id}')">移除</button>`);
   } else if (ws === 'holding') {
     btns.push(`<span class="text-xs text-green-600 font-medium">持仓中</span>`);

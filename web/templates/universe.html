@@ -21,9 +21,16 @@
   <button class="tab-btn" data-tab="removed" onclick="switchTab('removed')">已移除 <span id="tab-count-removed" class="tab-badge">0</span></button>
 </div>
 
-<!-- 搜索 + 六维筛选 -->
+<!-- 搜索 + 市场 + 六维筛选 -->
 <div class="flex items-center gap-3 mb-4">
   <input type="text" id="search-input" placeholder="搜索代码或名称..." class="w-64" oninput="debounceLoad()">
+  <span class="text-gray-300">|</span>
+  <select id="filter-market" onchange="applyFilter()" class="text-sm w-20">
+    <option value="">市场</option>
+    <option value="us">美股</option>
+    <option value="hk">港股</option>
+    <option value="cn">A股</option>
+  </select>
   <span class="text-gray-300">|</span>
   <select id="filter-dl" onchange="applyFilter()" class="text-sm w-20">
     <option value="">DL</option>
@@ -90,6 +97,7 @@
     <div class="flex items-center gap-2 text-sm text-gray-500">
       <span>每页</span>
       <select id="page-size-select" onchange="changePageSize(this.value)" class="text-sm border rounded px-1 py-0.5">
+        <option value="10">10</option>
         <option value="20" selected>20</option>
         <option value="50">50</option>
         <option value="100">100</option>
@@ -182,6 +190,8 @@ async function loadStocks() {
   params.push('page=' + currentPage);
   params.push('page_size=' + (pageSize === 'all' ? 10000 : pageSize));
   if (search) params.push('search=' + encodeURIComponent(search));
+  var market = document.getElementById('filter-market').value;
+  if (market) params.push('market=' + encodeURIComponent(market));
   ['dl','pt','lk','sf','ty','dn'].forEach(function(dim) {
     var v = document.getElementById('filter-' + dim).value;
     if (v) params.push(dim + '=' + encodeURIComponent(v));
@@ -208,7 +218,7 @@ function applyFilter() {
 }
 
 function saveFilter() {
-  var f = { tab: currentTab, search: document.getElementById('search-input').value, page: currentPage };
+  var f = { tab: currentTab, search: document.getElementById('search-input').value, page: currentPage, market: document.getElementById('filter-market').value };
   ['dl','pt','lk','sf','ty','dn'].forEach(function(dim) {
     f[dim] = document.getElementById('filter-' + dim).value;
   });
@@ -226,6 +236,7 @@ function restoreFilter() {
     if (f.tab) { currentTab = f.tab; }
     if (f.page) { currentPage = f.page; }
     if (f.search) document.getElementById('search-input').value = f.search;
+    if (f.market) document.getElementById('filter-market').value = f.market;
     ['dl','pt','lk','sf','ty','dn'].forEach(function(dim) {
       if (f[dim]) document.getElementById('filter-' + dim).value = f[dim];
     });
@@ -409,7 +420,8 @@ function renderActions(s) {
     btns.push('<button class="btn btn-success btn-sm" onclick="upgradeStock(\'' + s.id + '\',\'focused\')">升级重点</button>');
     btns.push('<button class="btn btn-danger btn-sm" onclick="removeStock(\'' + s.id + '\')">移除</button>');
   } else if (ws === 'focused') {
-    btns.push('<button class="btn btn-ghost btn-sm" onclick="downgradeStock(\'' + s.id + '\',\'watching\')">降级扫描</button>');
+    btns.push('<button class="btn btn-ghost btn-sm" onclick="downgradeStock(\'' + s.id + '\',\'watching\')">降级关注</button>');
+    btns.push('<button class="btn btn-ghost btn-sm" onclick="downgradeStock(\'' + s.id + '\',\'idle\')">回库</button>');
     btns.push('<button class="btn btn-danger btn-sm" onclick="removeStock(\'' + s.id + '\')">移除</button>');
   } else if (ws === 'holding') {
     btns.push('<span class="text-xs text-green-600 font-medium">持仓中</span>');
@@ -565,7 +577,7 @@ function formatTime(t) {
 function goDetail(stockId) {
   saveFilter();
   sessionStorage.setItem('stockDetailFrom', 'universe');
-  window.location.href = '/stocks/' + stockId;
+  window.location.href = '/stocks/' + stockId + '?from_page=universe';
 }
 
 // 初始加载 — 恢复筛选状态，再通过 switchTab 确保表头列显隐与数据列一致
