@@ -7,7 +7,7 @@ from typing import Optional, List
 
 class StockImport(BaseModel):
     symbols: List[str]
-    end_date: Optional[str] = None
+    end_date: str  # 标注导入必须指定截止日期
     tags: Optional[List[str]] = None  # 标签名列表
 
 

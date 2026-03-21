@@ -4,12 +4,13 @@
 {% block head %}
 <style>
   .detail-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
-  .algo-row { display: flex; align-items: center; gap: 8px; padding: 8px 0; border-bottom: 1px solid #f3f4f6; }
-  .algo-label { width: 36px; flex-shrink: 0; font-weight: 700; color: #6b7280; font-size: 13px; }
-  .algo-grade { width: 48px; flex-shrink: 0; text-align: center; }
-  .algo-detail { font-size: 12px; color: #9ca3af; margin-left: 8px; min-width: 0; }
-  .label-row { display: flex; align-items: center; gap: 8px; padding: 8px 0; border-bottom: 1px solid #f3f4f6; }
-  .label-name { width: 36px; font-weight: 700; color: #6b7280; font-size: 13px; }
+  .dim-row, .algo-row { display: flex; align-items: center; gap: 8px; padding: 10px 0; border-bottom: 1px solid #f3f4f6; min-height: 44px; box-sizing: border-box; }
+  .dim-label, .algo-label { width: 36px; flex-shrink: 0; font-weight: 700; color: #6b7280; font-size: 13px; }
+  .dim-grade, .algo-grade { width: 48px; flex-shrink: 0; text-align: center; }
+  .algo-detail { font-size: 12px; color: #9ca3af; margin-left: 4px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+  .algo-ref { font-size: 11px; color: #d1d5db; margin-left: 4px; flex-shrink: 0; }
+  .algo-ref.diff { color: #f59e0b; font-weight: 600; }
+  .algo-ref.same { color: #10b981; }
   .chart-container { background: white; border-radius: 12px; overflow: hidden; border: 1px solid #e5e7eb; }
   .chart-container img { width: 100%; height: auto; display: block; }
   /* 标签多选下拉 */
@@ -69,7 +70,7 @@
         <div class="tag-dropdown" id="tag-dropdown"></div>
       </div>
     </div>
-    <div class="flex items-center gap-2">
+    <div id="end-date-area" class="flex items-center gap-2">
       <span class="text-gray-500">截止日期:</span>
       <span id="stock-end-date" class="font-mono">{{ stock.end_date or '-' }}</span>
       <button class="text-blue-500 hover:text-blue-700 text-xs" onclick="editEndDate()">修改</button>
@@ -121,47 +122,56 @@
   <!-- 右：人工标注 -->
   <div class="bg-white rounded-lg shadow-sm border p-5">
     <div class="flex items-center justify-between mb-3">
-      <h3 class="font-bold text-gray-700">人工标注</h3>
+      <h3 class="font-bold text-gray-700" id="label-title">人工标注</h3>
       <button class="btn btn-ghost btn-sm" onclick="copyFromAlgo()" title="一键填入算法评分">同意算法</button>
     </div>
+    <div id="snapshot-hint" class="text-xs text-amber-600 bg-amber-50 rounded px-3 py-2 mb-3" style="display:none">
+      保存标注将创建今日快照，新记录出现在标注列表中。品种库原始数据不受影响。
+    </div>
     <form id="label-form" onsubmit="saveLabel(event)">
-      <div class="label-row">
-        <span class="label-name">DL</span>
-        <select name="dl_grade" class="w-20"><option value="">-</option><option>S</option><option>A</option><option>B</option><option>C</option></select>
+      <div class="dim-row">
+        <span class="dim-label">DL</span>
+        <select name="dl_grade" class="w-20" onchange="updateDiffHighlights()"><option value="">-</option><option>S</option><option>A</option><option>B</option><option>C</option></select>
+        <span class="algo-ref" data-dim="dl"></span>
         <input type="text" name="dl_note" placeholder="备注" class="flex-1 text-sm">
       </div>
-      <div class="label-row">
-        <span class="label-name">PT</span>
-        <select name="pt_grade" class="w-20"><option value="">-</option><option>S</option><option>A</option><option>B</option><option>C</option></select>
+      <div class="dim-row">
+        <span class="dim-label">PT</span>
+        <select name="pt_grade" class="w-20" onchange="updateDiffHighlights()"><option value="">-</option><option>S</option><option>A</option><option>B</option><option>C</option></select>
+        <span class="algo-ref" data-dim="pt"></span>
         <input type="text" name="pt_note" placeholder="备注" class="flex-1 text-sm">
       </div>
-      <div class="label-row">
-        <span class="label-name">LK</span>
-        <select name="lk_grade" class="w-20"><option value="">-</option><option>S</option><option>A</option><option>B</option><option>C</option></select>
+      <div class="dim-row">
+        <span class="dim-label">LK</span>
+        <select name="lk_grade" class="w-20" onchange="updateDiffHighlights()"><option value="">-</option><option>S</option><option>A</option><option>B</option><option>C</option></select>
+        <span class="algo-ref" data-dim="lk"></span>
         <input type="text" name="lk_note" placeholder="备注" class="flex-1 text-sm">
       </div>
-      <div class="label-row">
-        <span class="label-name">SF</span>
-        <select name="sf_grade" class="w-20"><option value="">-</option><option>1st</option><option>2nd</option><option>3rd</option></select>
+      <div class="dim-row">
+        <span class="dim-label">SF</span>
+        <select name="sf_grade" class="w-20" onchange="updateDiffHighlights()"><option value="">-</option><option>1st</option><option>2nd</option><option>3rd</option></select>
+        <span class="algo-ref" data-dim="sf"></span>
         <input type="text" name="sf_note" placeholder="备注" class="flex-1 text-sm">
       </div>
-      <div class="label-row">
-        <span class="label-name">TY</span>
-        <select name="ty_grade" class="w-20"><option value="">-</option><option>S</option><option>A</option><option>B</option><option>C</option><option>待定</option></select>
+      <div class="dim-row">
+        <span class="dim-label">TY</span>
+        <select name="ty_grade" class="w-20" onchange="updateDiffHighlights()"><option value="">-</option><option>S</option><option>A</option><option>B</option><option>C</option><option>待定</option></select>
+        <span class="algo-ref" data-dim="ty"></span>
         <input type="text" name="ty_note" placeholder="备注" class="flex-1 text-sm">
       </div>
-      <div class="label-row">
-        <span class="label-name">DN</span>
-        <select name="dn_grade" class="w-20"><option value="">-</option><option>S</option><option>A</option><option>B</option><option>C</option><option>待定</option></select>
+      <div class="dim-row">
+        <span class="dim-label">DN</span>
+        <select name="dn_grade" class="w-20" onchange="updateDiffHighlights()"><option value="">-</option><option>S</option><option>A</option><option>B</option><option>C</option><option>待定</option></select>
+        <span class="algo-ref" data-dim="dn"></span>
         <input type="text" name="dn_note" placeholder="备注" class="flex-1 text-sm">
       </div>
       <div class="mt-4 pt-3 border-t">
-        <div class="label-row">
-          <span class="label-name" style="width:48px">判断</span>
+        <div class="dim-row">
+          <span class="dim-label" style="width:48px">判断</span>
           <select name="verdict" class="w-28"><option value="">-</option><option>1R做</option><option>0.5R做</option><option>等待</option><option>不做</option></select>
         </div>
-        <div class="label-row" style="border:none">
-          <span class="label-name" style="width:48px">理由</span>
+        <div class="dim-row" style="border:none">
+          <span class="dim-label" style="width:48px">理由</span>
           <input type="text" name="reason" placeholder="判断理由" class="flex-1 text-sm">
         </div>
       </div>
@@ -266,10 +276,19 @@ async function loadDetail() {
     renderAlgoResults(stockData);
     renderFundamentals(stockData.fundamentals);
     if (stockData.label) fillLabel(stockData.label);
+    updateDiffHighlights();
     currentStockTags = stockData.tags || [];
     renderTagSelect();
     document.getElementById('stock-end-date').textContent = stockData.end_date || '-';
     document.getElementById('stock-updated-at').textContent = formatTime(stockData.updated_at);
+
+    // 品种库模式 UI 适配
+    if (detailFrom === 'universe') {
+      document.getElementById('end-date-area').style.display = 'none';
+      document.getElementById('label-title').textContent = '人工标注（快照模式）';
+      document.getElementById('snapshot-hint').style.display = 'block';
+      document.getElementById('btn-save').textContent = '保存标注快照';
+    }
   } catch(e) { showToast(e.message, 'error'); }
 }
 
@@ -462,9 +481,9 @@ function renderAlgoResults(data) {
       html += dims.map(d => {
         const grade = data.label[d+'_grade'] || '-';
         const note = data.label[d+'_note'] || '';
-        return '<div class="algo-row">' +
-          '<span class="algo-label">' + labels[d] + '</span>' +
-          '<span class="algo-grade">' + gradeTag(grade) + '</span>' +
+        return '<div class="dim-row">' +
+          '<span class="dim-label">' + labels[d] + '</span>' +
+          '<span class="dim-grade">' + gradeTag(grade) + '</span>' +
           '<span class="algo-detail">' + note + '</span>' +
         '</div>';
       }).join('');
@@ -501,9 +520,9 @@ function renderAlgoResults(data) {
         detail = d.result.reasoning.join('; ');
       }
     }
-    return '<div class="algo-row">' +
-      '<span class="algo-label">' + d.key + '</span>' +
-      '<span class="algo-grade">' + gradeTag(grade) + '</span>' +
+    return '<div class="dim-row">' +
+      '<span class="dim-label">' + d.key + '</span>' +
+      '<span class="dim-grade">' + gradeTag(grade) + '</span>' +
       '<span class="algo-detail">' + d.extra + ' ' + detail + '</span>' +
     '</div>';
   }).join('');
@@ -522,6 +541,24 @@ function fillLabel(label) {
                       'verdict','reason']) {
     const el = form.elements[key];
     if (el && label[key]) el.value = label[key];
+  }
+  updateDiffHighlights();
+}
+
+// 对比算法评级 vs 人工标注，高亮差异
+function updateDiffHighlights() {
+  if (!stockData) return;
+  var dims = ['dl','pt','lk','sf','ty','dn'];
+  var form = document.getElementById('label-form');
+  for (var i = 0; i < dims.length; i++) {
+    var d = dims[i], ag = stockData[d + '_grade'] || '';
+    var sel = form.elements[d + '_grade'], hg = sel ? sel.value : '';
+    var ref = document.querySelector('.algo-ref[data-dim="' + d + '"]');
+    if (!ref) continue;
+    if (!ag) { ref.textContent = ''; ref.className = 'algo-ref'; }
+    else if (!hg) { ref.textContent = '(' + ag + ')'; ref.className = 'algo-ref'; }
+    else if (hg === ag) { ref.textContent = '='; ref.className = 'algo-ref same'; }
+    else { ref.textContent = '(' + ag + ')'; ref.className = 'algo-ref diff'; }
   }
 }
 
@@ -545,6 +582,7 @@ function copyFromAlgo() {
     if (form.elements.verdict) form.elements.verdict.value = v;
   }
   showToast('已填入算法评分');
+  updateDiffHighlights();
 }
 
 async function saveLabel(e) {
@@ -557,14 +595,23 @@ async function saveLabel(e) {
     data[key] = form.elements[key] ? form.elements[key].value : '';
   }
   const btn = document.getElementById('btn-save');
+  const isUniverse = detailFrom === 'universe';
   btn.disabled = true; btn.textContent = '保存中...';
   try {
-    await api('/api/stocks/' + STOCK_ID + '/label', {
+    const url = '/api/stocks/' + STOCK_ID + '/label' + (isUniverse ? '?from_page=universe' : '');
+    const result = await api(url, {
       method: 'PUT', body: JSON.stringify(data)
     });
-    showToast('标注已保存');
+    if (isUniverse && result.new_stock_id) {
+      showToast('标注快照已保存，可在标注列表中查看');
+    } else {
+      showToast('标注已保存');
+    }
   } catch(e) { showToast(e.message, 'error'); }
-  finally { btn.disabled = false; btn.textContent = '保存标注'; }
+  finally {
+    btn.disabled = false;
+    btn.textContent = isUniverse ? '保存标注快照' : '保存标注';
+  }
 }
 
 async function reanalyze() {

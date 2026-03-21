@@ -14,9 +14,11 @@ def list_tags():
     with get_db() as conn:
         rows = conn.execute("""
             SELECT t.id, t.name, t.created_at,
-                   COUNT(st.stock_id) as stock_count
+                   COUNT(s.id) as stock_count
             FROM tags t
             LEFT JOIN stock_tags st ON st.tag_id = t.id
+            LEFT JOIN stocks s ON s.id = st.stock_id
+                AND s.end_date IS NOT NULL AND s.end_date != ''
             GROUP BY t.id
             ORDER BY t.created_at DESC
         """).fetchall()
@@ -67,9 +69,11 @@ def rename_tag(tag_id: str, req: TagCreate):
 
         conn.execute("UPDATE tags SET name=? WHERE id=?", (name, tag_id))
 
-        count = conn.execute(
-            "SELECT COUNT(*) as c FROM stock_tags WHERE tag_id=?", (tag_id,)
-        ).fetchone()['c']
+        count = conn.execute("""
+            SELECT COUNT(*) as c FROM stock_tags st
+            JOIN stocks s ON s.id = st.stock_id
+            WHERE st.tag_id=? AND s.end_date IS NOT NULL AND s.end_date != ''
+        """, (tag_id,)).fetchone()['c']
 
     return TagResponse(
         id=tag_id, name=name,

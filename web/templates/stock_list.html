@@ -4,7 +4,7 @@
 {% block content %}
 <!-- 顶栏 -->
 <div class="flex items-center justify-between mb-4">
-  <h1 class="text-2xl font-bold text-gray-800">股票列表</h1>
+  <h1 class="text-2xl font-bold text-gray-800">标注列表</h1>
   <div class="flex items-center gap-2">
     <button class="btn btn-ghost btn-sm" onclick="openTagModal()">管理标签</button>
     <button class="btn btn-primary" onclick="openImportModal()">+ 导入股票</button>
@@ -160,8 +160,8 @@
       <textarea id="import-symbols" rows="6" class="w-full font-mono" placeholder="603817&#10;600802&#10;02610&#10;HIMS"></textarea>
     </div>
     <div class="mb-4">
-      <label class="block text-sm font-medium text-gray-600 mb-1">截止日期（可选，默认今天）</label>
-      <input type="text" id="import-end-date" class="w-full" placeholder="YYYY-MM-DD">
+      <label class="block text-sm font-medium text-gray-600 mb-1">截止日期（必填，YYYY-MM-DD）</label>
+      <input type="text" id="import-end-date" class="w-full" placeholder="YYYY-MM-DD" required>
     </div>
     <div class="mb-4">
       <label class="block text-sm font-medium text-gray-600 mb-1">标签（可选，用逗号分隔，不存在的自动创建）</label>
@@ -551,11 +551,12 @@ function closeImportModal() {
 
 async function doImport(analyze) {
   const raw = document.getElementById('import-symbols').value.trim();
-  const endDate = document.getElementById('import-end-date').value.trim() || null;
+  const endDate = document.getElementById('import-end-date').value.trim();
   const tagsRaw = document.getElementById('import-tags').value.trim();
 
   const symbols = raw.split(/[\n,\s\/]+/).map(s => s.trim()).filter(s => s);
   if (symbols.length === 0) { showToast('请输入股票代码', 'error'); return; }
+  if (!endDate) { showToast('标注导入必须指定截止日期', 'error'); return; }
 
   const tags = tagsRaw ? tagsRaw.split(/[,，]/).map(s => s.trim()).filter(s => s) : null;
 

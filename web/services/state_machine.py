@@ -161,14 +161,11 @@ def is_downgraded(stock: dict) -> bool:
 
 
 def get_stocks_by_watch_status(status: str) -> list:
-    """获取指定监控状态的所有股票"""
+    """获取指定监控状态的所有股票（纯算法评级，不关联人工标注）"""
     with get_db() as conn:
         rows = conn.execute("""
-            SELECT s.*, l.dl_grade as label_dl, l.pt_grade as label_pt,
-                   l.lk_grade as label_lk, l.sf_grade as label_sf,
-                   l.ty_grade as label_ty, l.dn_grade as label_dn
+            SELECT s.*
             FROM stocks s
-            LEFT JOIN labels l ON l.stock_id = s.id
             WHERE s.watch_status = ?
             ORDER BY s.updated_at DESC
         """, (status,)).fetchall()
@@ -176,12 +173,12 @@ def get_stocks_by_watch_status(status: str) -> list:
 
 
 def get_effective_grades(stock: dict) -> dict:
-    """获取有效评级（优先用人工标注，其次用系统分析结果）"""
+    """获取有效评级（品种库使用纯算法评级）"""
     return {
-        'dl_grade': stock.get('label_dl') or stock.get('dl_grade'),
-        'pt_grade': stock.get('label_pt') or stock.get('pt_grade'),
-        'lk_grade': stock.get('label_lk') or stock.get('lk_grade'),
-        'sf_grade': stock.get('label_sf') or stock.get('sf_grade'),
-        'ty_grade': stock.get('label_ty') or stock.get('ty_grade'),
-        'dn_grade': stock.get('label_dn') or stock.get('dn_grade'),
+        'dl_grade': stock.get('dl_grade'),
+        'pt_grade': stock.get('pt_grade'),
+        'lk_grade': stock.get('lk_grade'),
+        'sf_grade': stock.get('sf_grade'),
+        'ty_grade': stock.get('ty_grade'),
+        'dn_grade': stock.get('dn_grade'),
     }

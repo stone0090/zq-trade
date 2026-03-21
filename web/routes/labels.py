@@ -13,17 +13,24 @@ router = APIRouter(prefix="/api", tags=["labels"])
 
 
 @router.put("/stocks/{stock_id}/label")
-def upsert_label(stock_id: str, req: LabelUpsert):
+def upsert_label(stock_id: str, req: LabelUpsert, from_page: Optional[str] = Query(None)):
     now = datetime.now().isoformat()
+    today = datetime.now().strftime('%Y-%m-%d')
 
     with get_db() as conn:
-        # 确认股票存在
-        stock = conn.execute("SELECT id FROM stocks WHERE id=?", (stock_id,)).fetchone()
-        if not stock:
+        # 确认源股票存在
+        source = conn.execute("SELECT * FROM stocks WHERE id=?", (stock_id,)).fetchone()
+        if not source:
             raise HTTPException(404, "股票不存在")
 
-        # upsert 标注
-        existing = conn.execute("SELECT id FROM labels WHERE stock_id=?", (stock_id,)).fetchone()
+        # 品种库标注 → 创建/复用快照记录
+        if from_page == 'universe':
+            target_stock_id = _get_or_create_snapshot(conn, source, today, now)
+        else:
+            target_stock_id = stock_id
+
+        # upsert 标注（对 target_stock_id）
+        existing = conn.execute("SELECT id FROM labels WHERE stock_id=?", (target_stock_id,)).fetchone()
 
         if existing:
             conn.execute("""
@@ -45,7 +52,7 @@ def upsert_label(stock_id: str, req: LabelUpsert):
                 req.ty_grade, req.ty_note,
                 req.dn_grade, req.dn_note,
                 req.verdict, req.reason,
-                now, stock_id,
+                now, target_stock_id,
             ))
         else:
             label_id = str(uuid.uuid4())
@@ -62,7 +69,7 @@ def upsert_label(stock_id: str, req: LabelUpsert):
                     created_at, updated_at
                 ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             """, (
-                label_id, stock_id,
+                label_id, target_stock_id,
                 req.dl_grade, req.dl_note,
                 req.pt_grade, req.pt_note,
                 req.lk_grade, req.lk_note,
@@ -73,14 +80,70 @@ def upsert_label(stock_id: str, req: LabelUpsert):
                 now, now,
             ))
 
-        # 更新 stocks.updated_at
-        conn.execute("UPDATE stocks SET updated_at=? WHERE id=?", (now, stock_id))
+        # 更新快照/标注记录的 updated_at
+        conn.execute("UPDATE stocks SET updated_at=? WHERE id=?", (now, target_stock_id))
 
     # 同步写入 labeled_cases.csv
     with get_db() as conn:
         sync_labels_to_csv(conn)
 
+    if from_page == 'universe':
+        return {"message": "标注快照已保存", "new_stock_id": target_stock_id}
     return {"message": "标注已保存"}
+
+
+def _get_or_create_snapshot(conn, source, end_date: str, now: str) -> str:
+    """品种库标注时，获取或创建快照 stock 记录。返回快照 stock_id。"""
+    symbol = source['symbol']
+
+    # 查找同 symbol + 同 end_date 的已有快照
+    existing = conn.execute(
+        "SELECT id FROM stocks WHERE symbol=? AND COALESCE(end_date,'')=?",
+        (symbol, end_date)
+    ).fetchone()
+
+    if existing:
+        # 更新快照的算法数据为品种库最新
+        conn.execute("""
+            UPDATE stocks SET
+                symbol_name=?, market=?, score_card_json=?, chart_path=?,
+                dl_grade=?, pt_grade=?, lk_grade=?,
+                sf_grade=?, ty_grade=?, dn_grade=?,
+                conclusion=?, position_size=?,
+                analyzed_at=?, updated_at=?
+            WHERE id=?
+        """, (
+            source['symbol_name'], source['market'],
+            source['score_card_json'], source['chart_path'],
+            source['dl_grade'], source['pt_grade'], source['lk_grade'],
+            source['sf_grade'], source['ty_grade'], source['dn_grade'],
+            source['conclusion'], source['position_size'],
+            source['analyzed_at'], now,
+            existing['id'],
+        ))
+        return existing['id']
+
+    # 创建新快照
+    snapshot_id = str(uuid.uuid4())
+    conn.execute("""
+        INSERT INTO stocks (
+            id, symbol, symbol_name, market, end_date,
+            watch_status, source_type, status,
+            score_card_json, chart_path,
+            dl_grade, pt_grade, lk_grade,
+            sf_grade, ty_grade, dn_grade,
+            conclusion, position_size,
+            created_at, updated_at, analyzed_at
+        ) VALUES (?,?,?,?,?, 'none','universe_snapshot','completed', ?,?, ?,?,?, ?,?,?, ?,?, ?,?,?)
+    """, (
+        snapshot_id, symbol, source['symbol_name'], source['market'], end_date,
+        source['score_card_json'], source['chart_path'],
+        source['dl_grade'], source['pt_grade'], source['lk_grade'],
+        source['sf_grade'], source['ty_grade'], source['dn_grade'],
+        source['conclusion'], source['position_size'],
+        now, now, source['analyzed_at'],
+    ))
+    return snapshot_id
 
 
 @router.get("/stocks/{stock_id}/label")

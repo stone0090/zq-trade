@@ -37,6 +37,9 @@ def list_stocks(
         conditions = []
         params = []
 
+        # 标注模块只显示有截止日期的记录（排除品种库记录）
+        conditions.append("s.end_date IS NOT NULL")
+
         if tag:
             conditions.append(
                 "s.id IN (SELECT st.stock_id FROM stock_tags st JOIN tags t ON t.id=st.tag_id WHERE t.name=?)"
@@ -69,7 +72,7 @@ def list_stocks(
             if val and val in mapping:
                 allowed = mapping[val]
                 placeholders = ','.join('?' * len(allowed))
-                conditions.append(f"COALESCE(s.{col}, l.{col}) IN ({placeholders})")
+                conditions.append(f"COALESCE(l.{col}, s.{col}) IN ({placeholders})")
                 params.extend(allowed)
 
         where = ""
@@ -79,14 +82,14 @@ def list_stocks(
         # label_status 需要在 HAVING 或者后过滤
         query = f"""
             SELECT s.id, s.symbol, s.symbol_name, s.market, s.end_date, s.status,
-                   COALESCE(s.dl_grade, l.dl_grade) as dl_grade,
-                   COALESCE(s.pt_grade, l.pt_grade) as pt_grade,
-                   COALESCE(s.lk_grade, l.lk_grade) as lk_grade,
-                   COALESCE(s.sf_grade, l.sf_grade) as sf_grade,
-                   COALESCE(s.ty_grade, l.ty_grade) as ty_grade,
-                   COALESCE(s.dn_grade, l.dn_grade) as dn_grade,
-                   COALESCE(s.conclusion, l.reason) as conclusion,
-                   COALESCE(s.position_size, l.verdict) as position_size,
+                   COALESCE(l.dl_grade, s.dl_grade) as dl_grade,
+                   COALESCE(l.pt_grade, s.pt_grade) as pt_grade,
+                   COALESCE(l.lk_grade, s.lk_grade) as lk_grade,
+                   COALESCE(l.sf_grade, s.sf_grade) as sf_grade,
+                   COALESCE(l.ty_grade, s.ty_grade) as ty_grade,
+                   COALESCE(l.dn_grade, s.dn_grade) as dn_grade,
+                   COALESCE(l.reason, s.conclusion) as conclusion,
+                   COALESCE(l.verdict, s.position_size) as position_size,
                    s.analyzed_at,
                    s.updated_at,
                    CASE WHEN l.id IS NOT NULL THEN 'labeled' ELSE 'unlabeled' END as label_status
@@ -132,6 +135,8 @@ def import_stocks(req: StockImport):
     symbols = [s.strip() for s in req.symbols if s.strip()]
     if not symbols:
         raise HTTPException(400, "股票列表不能为空")
+    if not req.end_date:
+        raise HTTPException(400, "标注导入必须指定截止日期 end_date")
 
     now = datetime.now().isoformat()
     imported = 0
@@ -355,6 +360,23 @@ def get_stock(stock_id: str):
             'reason': label_row['reason'],
         }
 
+    # 评级优先级：品种库用纯算法，标注记录用人工标注优先
+    is_universe = (row['watch_status'] or 'none') != 'none'
+    if is_universe:
+        eff_dl = row['dl_grade']
+        eff_pt = row['pt_grade']
+        eff_lk = row['lk_grade']
+        eff_sf = row['sf_grade']
+        eff_ty = row['ty_grade']
+        eff_dn = row['dn_grade']
+    else:
+        eff_dl = (label_row['dl_grade'] if label_row and label_row['dl_grade'] else None) or row['dl_grade']
+        eff_pt = (label_row['pt_grade'] if label_row and label_row['pt_grade'] else None) or row['pt_grade']
+        eff_lk = (label_row['lk_grade'] if label_row and label_row['lk_grade'] else None) or row['lk_grade']
+        eff_sf = (label_row['sf_grade'] if label_row and label_row['sf_grade'] else None) or row['sf_grade']
+        eff_ty = (label_row['ty_grade'] if label_row and label_row['ty_grade'] else None) or row['ty_grade']
+        eff_dn = (label_row['dn_grade'] if label_row and label_row['dn_grade'] else None) or row['dn_grade']
+
     return StockDetail(
         id=row['id'],
         symbol=row['symbol'],
@@ -364,12 +386,12 @@ def get_stock(stock_id: str):
         status=row['status'],
         error_message=row['error_message'],
         score_card=score_card,
-        dl_grade=(label_row['dl_grade'] if label_row and label_row['dl_grade'] else None) or row['dl_grade'],
-        pt_grade=(label_row['pt_grade'] if label_row and label_row['pt_grade'] else None) or row['pt_grade'],
-        lk_grade=(label_row['lk_grade'] if label_row and label_row['lk_grade'] else None) or row['lk_grade'],
-        sf_grade=(label_row['sf_grade'] if label_row and label_row['sf_grade'] else None) or row['sf_grade'],
-        ty_grade=(label_row['ty_grade'] if label_row and label_row['ty_grade'] else None) or row['ty_grade'],
-        dn_grade=(label_row['dn_grade'] if label_row and label_row['dn_grade'] else None) or row['dn_grade'],
+        dl_grade=eff_dl,
+        pt_grade=eff_pt,
+        lk_grade=eff_lk,
+        sf_grade=eff_sf,
+        ty_grade=eff_ty,
+        dn_grade=eff_dn,
         conclusion=row['conclusion'],
         position_size=row['position_size'],
         label=label,

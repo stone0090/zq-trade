@@ -58,7 +58,7 @@ def list_monitor_stocks(
             if val and val in mapping:
                 allowed = mapping[val]
                 ph = ','.join('?' * len(allowed))
-                conditions.append(f"COALESCE(s.{col}, l.{col}) IN ({ph})")
+                conditions.append(f"s.{col} IN ({ph})")
                 params.extend(allowed)
 
         where = "WHERE " + " AND ".join(conditions) if conditions else ""
@@ -66,15 +66,10 @@ def list_monitor_stocks(
         rows = conn.execute(f"""
             SELECT s.id, s.symbol, s.symbol_name, s.market, s.watch_status,
                    s.last_price, s.last_price_time, s.news_alert,
-                   COALESCE(l.dl_grade, s.dl_grade) as dl_grade,
-                   COALESCE(l.pt_grade, s.pt_grade) as pt_grade,
-                   COALESCE(l.lk_grade, s.lk_grade) as lk_grade,
-                   COALESCE(l.sf_grade, s.sf_grade) as sf_grade,
-                   COALESCE(l.ty_grade, s.ty_grade) as ty_grade,
-                   COALESCE(l.dn_grade, s.dn_grade) as dn_grade,
+                   s.dl_grade, s.pt_grade, s.lk_grade,
+                   s.sf_grade, s.ty_grade, s.dn_grade,
                    s.analyzed_at, s.updated_at
             FROM stocks s
-            LEFT JOIN labels l ON l.stock_id = s.id
             {where}
             ORDER BY
                 CASE s.watch_status
