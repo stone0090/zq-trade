@@ -116,16 +116,16 @@
 </div>
 
 <!-- 批量操作栏 -->
-<div id="batch-bar" class="hidden fixed bottom-6 left-1/2 transform -translate-x-1/2 bg-white shadow-lg rounded-lg px-6 py-3 flex items-center gap-4 border">
-  <span class="text-sm text-gray-600">已选 <span id="selected-count">0</span> 项</span>
+<div id="batch-bar" class="hidden fixed bottom-6 left-1/2 transform -translate-x-1/2 bg-white shadow-lg rounded-lg px-6 py-3 flex items-center gap-3 border">
+  <span class="text-sm text-gray-600 mr-2">已选 <span id="selected-count">0</span> 项</span>
   <button class="btn btn-success btn-sm" onclick="batchAction('confirm')" id="batch-main-btn">批量确认</button>
   <button class="btn btn-primary btn-sm" onclick="batchAction('upgrade_watching')" id="batch-upgrade-btn" style="display:none">批量升级关注</button>
   <button class="btn btn-primary btn-sm" onclick="batchAction('upgrade_focused')" id="batch-upgrade-focused-btn" style="display:none">批量升级重点</button>
   <button class="btn btn-warning btn-sm" onclick="batchAction('buy')" id="batch-buy-btn" style="display:none">批量买入</button>
-  <button class="btn btn-info btn-sm" onclick="batchReanalyze()" id="batch-reanalyze-btn">批量重新分析</button>
+  <button class="btn btn-ghost btn-sm" onclick="batchReanalyze()" id="batch-reanalyze-btn">重新分析</button>
   <button class="btn btn-danger btn-sm" onclick="batchAction('remove')" id="batch-remove-btn">批量移除</button>
   <button class="btn btn-danger btn-sm" onclick="batchAction('delete')" id="batch-delete-btn" style="display:none">批量删除</button>
-  <button class="btn btn-ghost btn-sm" onclick="clearSelection()">取消</button>
+  <button class="btn btn-ghost btn-sm text-gray-500" onclick="clearSelection()">取消</button>
 </div>
 
 <!-- 添加品种弹窗 -->

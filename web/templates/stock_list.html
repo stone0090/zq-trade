@@ -73,20 +73,14 @@
 </div>
 
 <!-- 批量操作栏 -->
-<div id="batch-bar" class="mb-4 p-3 bg-blue-50 border border-blue-200 rounded-lg hidden">
-  <div class="flex items-center justify-between">
-    <div class="flex items-center gap-3">
-      <span class="text-sm text-blue-700">已选择 <b id="batch-count">0</b> 只股票</span>
-      <button class="btn btn-ghost btn-sm" onclick="openBatchTagModal()">修改标签</button>
-      <button class="btn btn-ghost btn-sm" onclick="batchEditDate()">修改日期</button>
-      <button class="btn btn-ghost btn-sm" onclick="batchReanalyze()">重新分析</button>
-      <button class="btn btn-ghost btn-sm" style="color:#ef4444" onclick="batchRemove()">批量移除</button>
-    </div>
-    <div class="flex items-center gap-2">
-      <button class="btn btn-ghost btn-sm" onclick="selectAll()">全选</button>
-      <button class="btn btn-ghost btn-sm" onclick="clearSelection()">取消选择</button>
-    </div>
-  </div>
+<div id="batch-bar" class="hidden fixed bottom-6 left-1/2 transform -translate-x-1/2 bg-white shadow-lg rounded-lg px-6 py-3 flex items-center gap-3 border">
+  <span class="text-sm text-gray-600 mr-2">已选择 <b id="batch-count">0</b> 只股票</span>
+  <button class="btn btn-primary btn-sm" onclick="openBatchTagModal()">修改标签</button>
+  <button class="btn btn-primary btn-sm" onclick="batchEditDate()">修改日期</button>
+  <button class="btn btn-ghost btn-sm" onclick="batchReanalyze()">重新分析</button>
+  <button class="btn btn-danger btn-sm" onclick="batchRemove()">批量移除</button>
+  <button class="btn btn-ghost btn-sm" onclick="selectAll()">全选</button>
+  <button class="btn btn-ghost btn-sm text-gray-500" onclick="clearSelection()">取消</button>
 </div>
 
 <!-- 分析进度条 -->
