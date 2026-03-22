@@ -3,11 +3,14 @@
 
 {% block head %}
 <style>
-  .detail-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
-  .dim-row, .algo-row { display: flex; align-items: center; gap: 8px; padding: 10px 0; border-bottom: 1px solid #f3f4f6; min-height: 44px; box-sizing: border-box; }
+  .detail-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 24px; }
+  .dim-row { display: flex; align-items: center; gap: 8px; padding: 10px 0; border-bottom: 1px solid #f3f4f6; min-height: 44px; box-sizing: border-box; }
+  .algo-row { display: flex; align-items: flex-start; gap: 8px; padding: 10px 0; border-bottom: 1px solid #f3f4f6; min-height: 44px; box-sizing: border-box; }
+  .algo-row .dim-label, .algo-row .dim-grade { padding-top: 2px; }
   .dim-label, .algo-label { width: 36px; flex-shrink: 0; font-weight: 700; color: #6b7280; font-size: 13px; }
   .dim-grade, .algo-grade { width: 48px; flex-shrink: 0; text-align: center; }
-  .algo-detail { font-size: 12px; color: #9ca3af; margin-left: 4px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+  .algo-detail { font-size: 12px; color: #9ca3af; margin-left: 4px; min-width: 0; flex: 1; line-height: 1.5; }
+  #label-form select { min-width: 6rem; }
   .algo-ref { font-size: 11px; color: #d1d5db; margin-left: 4px; flex-shrink: 0; }
   .algo-ref.diff { color: #f59e0b; font-weight: 600; }
   .algo-ref.same { color: #10b981; }
@@ -86,7 +89,12 @@
   </div>
 </div>
 <div class="chart-container mb-6" id="chart-area">
-  {% if stock.status == 'completed' and stock.chart_path %}
+  {% if stock.status == 'analyzing' and stock.chart_path %}
+  <div style="position:relative">
+    <img src="/api/stocks/{{ stock.id }}/chart?t={{ now }}" alt="K线分析图表" loading="eager" style="opacity:0.4">
+    <div style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%)" class="text-blue-500 font-bold">重新分析中...</div>
+  </div>
+  {% elif stock.status == 'completed' and stock.chart_path %}
   <img src="/api/stocks/{{ stock.id }}/chart?t={{ now }}" alt="K线分析图表" loading="eager">
   {% elif stock.status == 'completed' and not stock.chart_path %}
   <div class="text-center py-12 text-gray-400">此股票无图表（历史导入数据）</div>
@@ -288,6 +296,11 @@ async function loadDetail() {
       document.getElementById('label-title').textContent = '人工标注（快照模式）';
       document.getElementById('snapshot-hint').style.display = 'block';
       document.getElementById('btn-save').textContent = '保存标注快照';
+    }
+
+    // 如果正在分析中，自动轮询等待完成
+    if (stockData.status === 'analyzing' || stockData.status === 'pending') {
+      startAnalyzePoll();
     }
   } catch(e) { showToast(e.message, 'error'); }
 }
@@ -520,7 +533,7 @@ function renderAlgoResults(data) {
         detail = d.result.reasoning.join('; ');
       }
     }
-    return '<div class="dim-row">' +
+    return '<div class="algo-row">' +
       '<span class="dim-label">' + d.key + '</span>' +
       '<span class="dim-grade">' + gradeTag(grade) + '</span>' +
       '<span class="algo-detail">' + d.extra + ' ' + detail + '</span>' +
@@ -614,14 +627,40 @@ async function saveLabel(e) {
   }
 }
 
+// 分析状态轮询（公共函数）
+var _analyzePollTimer = null;
+function startAnalyzePoll() {
+  if (_analyzePollTimer) return;
+  var btn = document.getElementById('btn-reanalyze');
+  if (btn) { btn.disabled = false; btn.textContent = '重新分析'; }
+  var pollCount = 0;
+  _analyzePollTimer = setInterval(async function() {
+    pollCount++;
+    try {
+      var data = await api('/api/stocks/' + STOCK_ID);
+      if (data.status !== 'analyzing' && data.status !== 'pending') {
+        clearInterval(_analyzePollTimer);
+        _analyzePollTimer = null;
+        window.location.reload();
+      } else if (pollCount >= 60) {
+        clearInterval(_analyzePollTimer);
+        _analyzePollTimer = null;
+        showToast('分析超时，请手动刷新', 'error');
+        if (btn) { btn.disabled = false; btn.textContent = '重新分析'; }
+      }
+    } catch(e) {}
+  }, 5000);
+}
+
 async function reanalyze() {
   const btn = document.getElementById('btn-reanalyze');
-  btn.disabled = true; btn.textContent = '分析中...';
+  btn.disabled = true; btn.textContent = '提交中...';
   try {
     await api('/api/stocks/' + STOCK_ID + '/analyze', { method: 'POST' });
-    showToast('重新分析已启动，请稍候刷新页面');
-    // 3秒后刷新
-    setTimeout(() => window.location.reload(), 3000);
+    showToast('重新分析已启动，等待完成...');
+    btn.disabled = false; btn.textContent = '重新分析';
+    if (_analyzePollTimer) { clearInterval(_analyzePollTimer); _analyzePollTimer = null; }
+    startAnalyzePoll();
   } catch(e) {
     showToast(e.message, 'error');
     btn.disabled = false; btn.textContent = '重新分析';

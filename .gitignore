@@ -62,8 +62,7 @@ Thumbs.db
 .env
 .env.local
 
-# Qoder
-.qoder/
+
 
 # Windows reserved names
 nul

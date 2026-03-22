@@ -434,7 +434,6 @@ def _build_conclusions(card: ScoreCard):
         simple_str = f"DL{_strip_reason(dl_tag)} / PT{_strip_reason(pt_tag)} / LK{_strip_reason(lk_tag)} / {_strip_reason(sf_tag)} / TY{_strip_reason(ty_tag)} / DN{_strip_reason(dn_tag)}"
         dir_label = "待定"
         card.conclusion_lines.append(f"{dir_label}：{simple_str}")
-        card.conclusion_lines.append(f"{dir_label}：{score_str}")
         return
 
     # ─── 为每个方向生成结论行 ───
@@ -445,7 +444,6 @@ def _build_conclusions(card: ScoreCard):
             score_str = f"DL{dl_tag} / PT{pt_tag} / LK{lk_tag} / {sf_tag} / TY{ty_tag} / DN{dn_tag}"
             simple_str = f"DL{_strip_reason(dl_tag)} / PT{_strip_reason(pt_tag)} / LK{_strip_reason(lk_tag)} / {_strip_reason(sf_tag)} / TY{_strip_reason(ty_tag)} / DN{_strip_reason(dn_tag)}"
             card.conclusion_lines.append(f"看空：{simple_str}  (A股不做空)")
-            card.conclusion_lines.append(f"看空：{score_str}  (A股不做空)")
             continue
 
         if dir_type == 'bullish':
@@ -462,7 +460,6 @@ def _build_conclusions(card: ScoreCard):
 
         if is_main:
             card.conclusion_lines.append(f"{dir_label}：{simple_str}")
-            card.conclusion_lines.append(f"{dir_label}：{score_str}")
         else:
             if dir_type == 'bullish' and pt:
                 zone_info = (f"阻力 {pt.resistance_zone_low:.2f}"
@@ -473,7 +470,6 @@ def _build_conclusions(card: ScoreCard):
             else:
                 zone_info = ""
             card.conclusion_lines.append(f"备注：{simple_str}  {zone_info}")
-            card.conclusion_lines.append(f"备注：{score_str}  {zone_info}")
 
 
 # ─── 各维度简短原因提取 ───

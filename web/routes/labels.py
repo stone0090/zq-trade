@@ -15,7 +15,6 @@ router = APIRouter(prefix="/api", tags=["labels"])
 @router.put("/stocks/{stock_id}/label")
 def upsert_label(stock_id: str, req: LabelUpsert, from_page: Optional[str] = Query(None)):
     now = datetime.now().isoformat()
-    today = datetime.now().strftime('%Y-%m-%d')
 
     with get_db() as conn:
         # 确认源股票存在
@@ -25,7 +24,10 @@ def upsert_label(stock_id: str, req: LabelUpsert, from_page: Optional[str] = Que
 
         # 品种库标注 → 创建/复用快照记录
         if from_page == 'universe':
-            target_stock_id = _get_or_create_snapshot(conn, source, today, now)
+            # end_date 取数据最后时间（updated_at），而非当前系统时间
+            data_time = source['updated_at'] or now
+            data_date = data_time[:10]  # YYYY-MM-DD
+            target_stock_id = _get_or_create_snapshot(conn, source, data_date, data_time)
         else:
             target_stock_id = stock_id
 
@@ -92,7 +94,7 @@ def upsert_label(stock_id: str, req: LabelUpsert, from_page: Optional[str] = Que
     return {"message": "标注已保存"}
 
 
-def _get_or_create_snapshot(conn, source, end_date: str, now: str) -> str:
+def _get_or_create_snapshot(conn, source, end_date: str, data_time: str) -> str:
     """品种库标注时，获取或创建快照 stock 记录。返回快照 stock_id。"""
     symbol = source['symbol']
 
@@ -118,7 +120,7 @@ def _get_or_create_snapshot(conn, source, end_date: str, now: str) -> str:
             source['dl_grade'], source['pt_grade'], source['lk_grade'],
             source['sf_grade'], source['ty_grade'], source['dn_grade'],
             source['conclusion'], source['position_size'],
-            source['analyzed_at'], now,
+            source['analyzed_at'], data_time,
             existing['id'],
         ))
         return existing['id']
@@ -141,7 +143,7 @@ def _get_or_create_snapshot(conn, source, end_date: str, now: str) -> str:
         source['dl_grade'], source['pt_grade'], source['lk_grade'],
         source['sf_grade'], source['ty_grade'], source['dn_grade'],
         source['conclusion'], source['position_size'],
-        now, now, source['analyzed_at'],
+        data_time, data_time, source['analyzed_at'],
     ))
     return snapshot_id
 

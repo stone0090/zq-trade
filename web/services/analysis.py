@@ -92,6 +92,9 @@ def analyze_stock(symbol: str, end_date: str = None, chart_dir: str = None) -> d
     if card.conclusion_lines:
         conclusion = card.conclusion_lines[0] if card.conclusion_lines else ''
 
+    # 数据最后时间（K线最新时间戳）
+    last_data_time = str(df.index[-1])
+
     return {
         'score_card': card_dict,
         'grades': grades,
@@ -100,6 +103,7 @@ def analyze_stock(symbol: str, end_date: str = None, chart_dir: str = None) -> d
         'symbol_name': card.symbol_name or '',
         'market': market,
         'chart_path': chart_path,
+        'last_data_time': last_data_time,
     }
 
 
@@ -157,6 +161,15 @@ def analyze_stocks_sync(stock_ids: list, db_path: str, chart_dir: str):
             try:
                 result = analyze_stock(symbol, end_date, chart_dir)
 
+                # 名称获取失败时保留数据库中原有名称
+                new_name = result['symbol_name']
+                if not new_name:
+                    existing = conn.execute(
+                        "SELECT symbol_name FROM stocks WHERE id=?", (stock_id,)
+                    ).fetchone()
+                    if existing and existing[0]:
+                        new_name = existing[0]
+
                 conn.execute("""
                     UPDATE stocks SET
                         status='completed',
@@ -168,7 +181,7 @@ def analyze_stocks_sync(stock_ids: list, db_path: str, chart_dir: str):
                         analyzed_at=?, updated_at=?
                     WHERE id=?
                 """, (
-                    result['symbol_name'], result['market'],
+                    new_name, result['market'],
                     json.dumps(result['score_card'], ensure_ascii=False),
                     result['chart_path'],
                     result['grades']['dl_grade'],
@@ -180,7 +193,7 @@ def analyze_stocks_sync(stock_ids: list, db_path: str, chart_dir: str):
                     result['conclusion'],
                     result['position_size'],
                     datetime.now().isoformat(),
-                    datetime.now().isoformat(),
+                    result.get('last_data_time', datetime.now().isoformat()),
                     stock_id,
                 ))
                 conn.commit()

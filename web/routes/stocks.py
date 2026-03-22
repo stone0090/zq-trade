@@ -228,13 +228,16 @@ def trigger_batch_analyze(req: dict = None):
 
 @router.post("/{stock_id}/analyze")
 def trigger_single_analyze(stock_id: str):
-    if is_running():
-        raise HTTPException(400, "分析正在进行中，请等待完成")
-
     with get_db() as conn:
-        row = conn.execute("SELECT id FROM stocks WHERE id=?", (stock_id,)).fetchone()
+        row = conn.execute("SELECT id, status FROM stocks WHERE id=?", (stock_id,)).fetchone()
         if not row:
             raise HTTPException(404, "股票不存在")
+        # 卡在 analyzing/pending 状态的，先重置再重新触发
+        if row['status'] in ('analyzing', 'pending'):
+            conn.execute(
+                "UPDATE stocks SET status='pending', error_message=NULL WHERE id=?",
+                (stock_id,)
+            )
 
     t = threading.Thread(
         target=analyze_stocks_sync,

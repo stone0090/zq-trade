@@ -1,5 +1,6 @@
 """FastAPI 应用入口"""
 import sys
+import logging
 from pathlib import Path
 from datetime import datetime
 from typing import Optional
@@ -58,6 +59,13 @@ app.include_router(dashboard_routes.router)
 
 @app.on_event("startup")
 async def startup():
+    # 配置 core 模块日志级别，确保数据获取详情输出到控制台
+    core_logger = logging.getLogger('core')
+    core_logger.setLevel(logging.INFO)
+    if not core_logger.handlers:
+        handler = logging.StreamHandler()
+        handler.setFormatter(logging.Formatter('%(name)s - %(message)s'))
+        core_logger.addHandler(handler)
     init_db()
     # 启动定时任务引擎
     from scheduler.engine import start_scheduler

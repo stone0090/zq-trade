@@ -136,8 +136,11 @@ def stop_scheduler():
     """停止定时任务调度器"""
     global _scheduler
     if _scheduler and _scheduler.running:
-        _scheduler.shutdown(wait=False)
-        logger.info("定时任务引擎已停止")
+        try:
+            _scheduler.shutdown(wait=False)
+            logger.info("定时任务引擎已停止")
+        except Exception as e:
+            logger.warning(f"定时任务引擎停止时出现异常(可忽略): {e}")
 
 
 def get_scheduler() -> Optional[BackgroundScheduler]:
