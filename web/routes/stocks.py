@@ -58,7 +58,7 @@ def list_stocks(
             )
             params.extend([search_term, search_term, search_term, search_term])
 
-        # 各维度评级筛选
+        # 各维度评级筛选（空字符串视为NULL，优先用人工标注）
         _grade_map = {'S': ('S',), 'A': ('S', 'A'), 'B': ('S', 'A', 'B')}
         _sf_map = {'1st': ('1st',), '2nd': ('1st', '2nd')}
         for col, val, mapping in [
@@ -72,7 +72,7 @@ def list_stocks(
             if val and val in mapping:
                 allowed = mapping[val]
                 placeholders = ','.join('?' * len(allowed))
-                conditions.append(f"COALESCE(l.{col}, s.{col}) IN ({placeholders})")
+                conditions.append(f"COALESCE(NULLIF(l.{col}, ''), s.{col}) IN ({placeholders})")
                 params.extend(allowed)
 
         where = ""
@@ -80,16 +80,17 @@ def list_stocks(
             where = "WHERE " + " AND ".join(conditions)
 
         # label_status 需要在 HAVING 或者后过滤
+        # 使用 NULLIF 将空字符串转为 NULL，确保 COALESCE 能正确回退到 stocks 表的值
         query = f"""
             SELECT s.id, s.symbol, s.symbol_name, s.market, s.end_date, s.status,
-                   COALESCE(l.dl_grade, s.dl_grade) as dl_grade,
-                   COALESCE(l.pt_grade, s.pt_grade) as pt_grade,
-                   COALESCE(l.lk_grade, s.lk_grade) as lk_grade,
-                   COALESCE(l.sf_grade, s.sf_grade) as sf_grade,
-                   COALESCE(l.ty_grade, s.ty_grade) as ty_grade,
-                   COALESCE(l.dn_grade, s.dn_grade) as dn_grade,
-                   COALESCE(l.reason, s.conclusion) as conclusion,
-                   COALESCE(l.verdict, s.position_size) as position_size,
+                   COALESCE(NULLIF(l.dl_grade, ''), s.dl_grade) as dl_grade,
+                   COALESCE(NULLIF(l.pt_grade, ''), s.pt_grade) as pt_grade,
+                   COALESCE(NULLIF(l.lk_grade, ''), s.lk_grade) as lk_grade,
+                   COALESCE(NULLIF(l.sf_grade, ''), s.sf_grade) as sf_grade,
+                   COALESCE(NULLIF(l.ty_grade, ''), s.ty_grade) as ty_grade,
+                   COALESCE(NULLIF(l.dn_grade, ''), s.dn_grade) as dn_grade,
+                   COALESCE(NULLIF(l.reason, ''), s.conclusion) as conclusion,
+                   COALESCE(NULLIF(l.verdict, ''), s.position_size) as position_size,
                    s.analyzed_at,
                    s.updated_at,
                    CASE WHEN l.id IS NOT NULL THEN 'labeled' ELSE 'unlabeled' END as label_status
@@ -247,6 +248,32 @@ def trigger_single_analyze(stock_id: str):
     t.start()
 
     return {"message": "分析已启动"}
+
+
+@router.post("/{stock_id}/stop-analyze")
+def stop_single_analyze(stock_id: str):
+    """停止正在进行的分析"""
+    from web.services.analysis import stop_analysis, is_running
+    
+    with get_db() as conn:
+        row = conn.execute("SELECT id, status FROM stocks WHERE id=?", (stock_id,)).fetchone()
+        if not row:
+            raise HTTPException(404, "股票不存在")
+        
+        # 只有分析中或待处理状态才能停止
+        if row['status'] not in ('analyzing', 'pending'):
+            return {"message": "当前不在分析中", "stopped": False}
+        
+        # 设置停止标志
+        stop_analysis()
+        
+        # 更新股票状态为错误，标记为用户取消
+        conn.execute(
+            "UPDATE stocks SET status='error', error_message='用户取消' WHERE id=?",
+            (stock_id,)
+        )
+    
+    return {"message": "分析已停止", "stopped": True}
 
 
 @router.post("/batch-update")

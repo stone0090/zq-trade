@@ -119,6 +119,10 @@
 <div id="batch-bar" class="hidden fixed bottom-6 left-1/2 transform -translate-x-1/2 bg-white shadow-lg rounded-lg px-6 py-3 flex items-center gap-4 border">
   <span class="text-sm text-gray-600">已选 <span id="selected-count">0</span> 项</span>
   <button class="btn btn-success btn-sm" onclick="batchAction('confirm')" id="batch-main-btn">批量确认</button>
+  <button class="btn btn-primary btn-sm" onclick="batchAction('upgrade_watching')" id="batch-upgrade-btn" style="display:none">批量升级关注</button>
+  <button class="btn btn-primary btn-sm" onclick="batchAction('upgrade_focused')" id="batch-upgrade-focused-btn" style="display:none">批量升级重点</button>
+  <button class="btn btn-warning btn-sm" onclick="batchAction('buy')" id="batch-buy-btn" style="display:none">批量买入</button>
+  <button class="btn btn-info btn-sm" onclick="batchReanalyze()" id="batch-reanalyze-btn">批量重新分析</button>
   <button class="btn btn-danger btn-sm" onclick="batchAction('remove')" id="batch-remove-btn">批量移除</button>
   <button class="btn btn-danger btn-sm" onclick="batchAction('delete')" id="batch-delete-btn" style="display:none">批量删除</button>
   <button class="btn btn-ghost btn-sm" onclick="clearSelection()">取消</button>
@@ -308,31 +312,53 @@ function switchTab(tab, resetPage) {
 
   // 批量操作按钮适配
   var mainBtn = document.getElementById('batch-main-btn');
+  var upgradeBtn = document.getElementById('batch-upgrade-btn');
+  var upgradeFocusedBtn = document.getElementById('batch-upgrade-focused-btn');
+  var buyBtn = document.getElementById('batch-buy-btn');
   var removeBtn = document.getElementById('batch-remove-btn');
   var deleteBtn = document.getElementById('batch-delete-btn');
+  
+  // 默认隐藏所有批量操作按钮
+  mainBtn.style.display = 'none';
+  upgradeBtn.style.display = 'none';
+  upgradeFocusedBtn.style.display = 'none';
+  buyBtn.style.display = 'none';
+  removeBtn.style.display = 'none';
+  deleteBtn.style.display = 'none';
+  
   if (tab === 'removed') {
     mainBtn.textContent = '批量恢复';
     mainBtn.onclick = function() { batchAction('restore'); };
     mainBtn.style.display = '';
-    removeBtn.style.display = 'none';
     deleteBtn.style.display = '';
   } else if (tab === 'pending') {
     mainBtn.textContent = '批量确认';
     mainBtn.onclick = function() { batchAction('confirm'); };
     mainBtn.style.display = '';
+    removeBtn.textContent = '批量拒绝';
     removeBtn.style.display = '';
-    deleteBtn.style.display = 'none';
   } else if (tab === 'idle') {
-    mainBtn.textContent = '批量升级扫描';
-    mainBtn.onclick = function() { batchAction('upgrade_watching'); };
-    mainBtn.style.display = '';
-    removeBtn.style.display = '';
-    deleteBtn.style.display = 'none';
-  } else {
-    mainBtn.style.display = 'none';
+    // 在库中：升级关注 + 移除
+    upgradeBtn.textContent = '批量升级关注';
+    upgradeBtn.style.display = '';
     removeBtn.textContent = '批量移除';
     removeBtn.style.display = '';
-    deleteBtn.style.display = 'none';
+  } else if (tab === 'watching') {
+    // 关注中：升级重点 + 移除
+    upgradeFocusedBtn.textContent = '批量升级重点';
+    upgradeFocusedBtn.style.display = '';
+    removeBtn.textContent = '批量移除';
+    removeBtn.style.display = '';
+  } else if (tab === 'focused') {
+    // 重点关注：买入 + 降级关注 + 移除（没有回库）
+    buyBtn.style.display = '';
+    removeBtn.textContent = '批量移除';
+    removeBtn.style.display = '';
+  } else if (tab === 'holding') {
+    // 持仓中：回库 + 移除
+    removeBtn.textContent = '批量回库';
+    removeBtn.onclick = function() { batchAction('downgrade_idle'); };
+    removeBtn.style.display = '';
   }
 }
 
@@ -414,14 +440,15 @@ function renderActions(s) {
     btns.push('<button class="btn btn-success btn-sm" onclick="confirmStock(\'' + s.id + '\')">确认</button>');
     btns.push('<button class="btn btn-danger btn-sm" onclick="removeStock(\'' + s.id + '\')">拒绝</button>');
   } else if (ws === 'idle') {
-    btns.push('<button class="btn btn-primary btn-sm" onclick="upgradeStock(\'' + s.id + '\',\'watching\')">→扫描</button>');
+    btns.push('<button class="btn btn-primary btn-sm" onclick="upgradeStock(\'' + s.id + '\',\'watching\')">升级关注</button>');
     btns.push('<button class="btn btn-danger btn-sm" onclick="removeStock(\'' + s.id + '\')">移除</button>');
   } else if (ws === 'watching') {
     btns.push('<button class="btn btn-success btn-sm" onclick="upgradeStock(\'' + s.id + '\',\'focused\')">升级重点</button>');
     btns.push('<button class="btn btn-danger btn-sm" onclick="removeStock(\'' + s.id + '\')">移除</button>');
   } else if (ws === 'focused') {
+    // 重点关注：买入 + 降级关注 + 移除（没有回库）
+    btns.push('<button class="btn btn-warning btn-sm" onclick="buyStock(\'' + s.id + '\')">买入</button>');
     btns.push('<button class="btn btn-ghost btn-sm" onclick="downgradeStock(\'' + s.id + '\',\'watching\')">降级关注</button>');
-    btns.push('<button class="btn btn-ghost btn-sm" onclick="downgradeStock(\'' + s.id + '\',\'idle\')">回库</button>');
     btns.push('<button class="btn btn-danger btn-sm" onclick="removeStock(\'' + s.id + '\')">移除</button>');
   } else if (ws === 'holding') {
     btns.push('<span class="text-xs text-green-600 font-medium">持仓中</span>');
@@ -514,15 +541,38 @@ async function downgradeStock(id, target) {
   } catch(e) { showToast(e.message, 'error'); }
 }
 
+async function buyStock(id) {
+  try {
+    await api('/api/monitor/' + id + '/buy', {method:'POST'});
+    showToast('已买入，移至持仓中');
+    refreshAll();
+  } catch(e) { showToast(e.message, 'error'); }
+}
+
 async function batchAction(action) {
   if (selectedIds.size === 0) return;
   if (action === 'delete' && !confirm('确认彻底删除 ' + selectedIds.size + ' 个品种？此操作不可恢复。')) return;
   try {
-    await api('/api/universe/batch-action', {
+    var url = monitorTabs.has(currentTab) ? '/api/monitor/batch-action' : '/api/universe/batch-action';
+    await api(url, {
       method: 'POST',
       body: JSON.stringify({stock_ids: Array.from(selectedIds), action: action})
     });
     showToast('批量操作完成 (' + selectedIds.size + '项)');
+    selectedIds.clear();
+    updateBatchBar();
+    refreshAll();
+  } catch(e) { showToast(e.message, 'error'); }
+}
+
+async function batchReanalyze() {
+  if (selectedIds.size === 0) return;
+  try {
+    await api('/api/stocks/analyze', {
+      method: 'POST',
+      body: JSON.stringify({stock_ids: Array.from(selectedIds)})
+    });
+    showToast('批量重新分析已启动 (' + selectedIds.size + '项)');
     selectedIds.clear();
     updateBatchBar();
     refreshAll();

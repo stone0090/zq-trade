@@ -144,3 +144,39 @@ def api_refresh_prices():
     """手动刷新监控品种价格"""
     summary = refresh_latest_prices()
     return {"ok": True, "message": summary}
+
+
+@router.post("/{stock_id}/buy")
+def buy_stock(stock_id: str):
+    """买入品种：focused -> holding"""
+    r = transition_stock(stock_id, "holding", "买入")
+    if not r["ok"]:
+        raise HTTPException(400, r["message"])
+    return r
+
+
+from pydantic import BaseModel
+
+class BatchActionReq(BaseModel):
+    stock_ids: list
+    action: str
+
+@router.post("/batch-action")
+def batch_action(req: BatchActionReq):
+    """批量操作：升级/降级/移除/买入"""
+    from web.services.state_machine import batch_transition
+    
+    action_map = {
+        "upgrade_watching": "watching",
+        "upgrade_focused": "focused",
+        "downgrade_idle": "idle",
+        "downgrade_watching": "watching",
+        "remove": "removed",
+        "buy": "holding",
+    }
+    target = action_map.get(req.action)
+    if not target:
+        raise HTTPException(400, f"未知操作: {req.action}")
+    
+    result = batch_transition(req.stock_ids, target, f"批量操作: {req.action}")
+    return result

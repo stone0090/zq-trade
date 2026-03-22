@@ -59,6 +59,7 @@ print(f"  Imported: {result['imported']}, Skipped: {result['skipped']}")
 # 重复导入
 r = client.post("/api/stocks/import", json={
     "symbols": ["600000", "600002"],
+    "end_date": "2024-03-01",
     "tags": ["测试标签B"]
 })
 assert r.status_code == 200

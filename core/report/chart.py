@@ -214,8 +214,12 @@ def _draw_dl(ax, dl, df, lk=None):
 
     # LK 标签紧跟 DL 右侧，用自己评分的颜色
     if lk:
-        lk_color = _score_color(lk.score)
-        label_lk = f"  LK({lk.score})"
+        if lk.pending:
+            lk_color = '#999999'
+            label_lk = "  LK(待定)"
+        else:
+            lk_color = _score_color(lk.score)
+            label_lk = f"  LK({lk.score})"
         ax.text(end, ruler_y - y_range * 0.008, label_lk,
                 fontproperties=_FONT, color=lk_color,
                 fontsize=10, ha='left', va='top', zorder=10)
@@ -245,15 +249,7 @@ def _draw_pt(ax, pt, dl, market='cn'):
                            pt.resistance_score,
                            _COLORS_PT_RES, '阻力')
 
-    # 绘制支撑区间（下平台）— A股跳过
-    if pt.support_price > 0 and market != 'cn':
-        _draw_one_platform(ax, start, end,
-                           pt.support_price,
-                           pt.support_zone_high,
-                           pt.support_zone_low,
-                           pt.support_touches,
-                           pt.support_score,
-                           _COLORS_PT_SUP, '支撑')
+    # 纯做多模式：不绘制支撑位
 
 
 def _draw_one_platform(ax, start, end, price, zone_high, zone_low,

@@ -66,14 +66,20 @@ def extract_grades(card_dict: dict) -> dict:
 
     lk = card_dict.get('lk_result')
     if lk:
-        grades['lk_grade'] = lk.get('score')
+        if lk.get('pending'):
+            grades['lk_grade'] = '待定'
+        else:
+            grades['lk_grade'] = lk.get('score')
     else:
         grades['lk_grade'] = None
 
     sf = card_dict.get('sf_result')
     if sf:
-        score_val = sf.get('score')
-        grades['sf_grade'] = str(score_val) if score_val else None
+        if sf.get('pending'):
+            grades['sf_grade'] = '待定'
+        else:
+            score_val = sf.get('score')
+            grades['sf_grade'] = str(score_val) if score_val else None
     else:
         grades['sf_grade'] = None
 

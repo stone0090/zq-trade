@@ -172,10 +172,13 @@ def print_score_card(card: ScoreCard):
     if card.lk_result:
         lk = card.lk_result
         print()
-        print(f"  LK 轮廓      {_bar(lk.score)}  {_format_score_tag(lk.score)}")
-        print(f"    质量分: {lk.quality_score:.2f}  |  "
-              f"振幅CV: {lk.range_cv:.3f}  |  "
-              f"异常K线: {lk.abnormal_count}根({lk.abnormal_ratio:.1%})")
+        if lk.pending:
+            print(f"  LK 轮廓      {_bar(GradeScore.C)}  {_c('[ 待定 ]', 'yellow')}")
+        else:
+            print(f"  LK 轮廓      {_bar(lk.score)}  {_format_score_tag(lk.score)}")
+            print(f"    质量分: {lk.quality_score:.2f}  |  "
+                  f"振幅CV: {lk.range_cv:.3f}  |  "
+                  f"异常K线: {lk.abnormal_count}根({lk.abnormal_ratio:.1%})")
         for r in lk.reasoning:
             _print_reasoning(r)
 
@@ -183,10 +186,13 @@ def print_score_card(card: ScoreCard):
     if card.sf_result:
         sf = card.sf_result
         print()
-        print(f"  SF 释放级别  {_bar(sf.score)}  {_format_score_tag(sf.score)}")
-        print(f"    尾部偏移: {sf.tail_drift_pct:.2f}%  |  "
-              f"尾长: {sf.tail_length}根  |  "
-              f"方向: {sf.direction or '未定'}")
+        if sf.pending:
+            print(f"  SF 释放级别  {_bar(GradeScore.C)}  {_c('[ 待定 ]', 'yellow')}")
+        else:
+            print(f"  SF 释放级别  {_bar(sf.score)}  {_format_score_tag(sf.score)}")
+            print(f"    尾部偏移: {sf.tail_drift_pct:.2f}%  |  "
+                  f"尾长: {sf.tail_length}根  |  "
+                  f"方向: {sf.direction or '未定'}")
         for r in sf.reasoning:
             _print_reasoning(r)
 

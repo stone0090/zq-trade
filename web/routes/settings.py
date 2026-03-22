@@ -60,9 +60,40 @@ def save_settings(req: SettingBatch):
 @router.post("/test-notify")
 def test_notify():
     """测试通知发送"""
-    from web.services.notifier import get_notifier
-    notifier = get_notifier()
-    if not notifier:
-        return {"ok": False, "error": "未配置通知通道"}
-    ok = notifier.send_text("ZQ-Trade 通知测试：连接成功！")
-    return {"ok": ok, "error": "" if ok else "发送失败，请检查 Webhook URL"}
+    from web.services.notifier import get_notifier, FeishuWebhookNotifier
+    from web.database import get_db
+    
+    # 检查配置
+    with get_db() as conn:
+        channel_row = conn.execute(
+            "SELECT value FROM settings WHERE key='notify_channel'"
+        ).fetchone()
+        url_row = conn.execute(
+            "SELECT value FROM settings WHERE key='feishu_webhook_url'"
+        ).fetchone()
+    
+    if not channel_row or not channel_row['value']:
+        return {"ok": False, "error": "未配置通知通道，请先选择通知通道并保存设置"}
+    
+    if channel_row['value'] == 'feishu':
+        if not url_row or not url_row['value']:
+            return {"ok": False, "error": "未配置飞书 Webhook URL，请先填写并保存设置"}
+        
+        # 直接测试，获取详细错误
+        notifier = FeishuWebhookNotifier(url_row['value'])
+        ok = notifier.send_text("ZQ-Trade 通知测试：连接成功！")
+        
+        if not ok:
+            # 从数据库获取最后一次错误记录
+            with get_db() as conn:
+                err_row = conn.execute(
+                    """SELECT error_message FROM notifications 
+                       WHERE channel='feishu' AND status='failed'
+                       ORDER BY created_at DESC LIMIT 1"""
+                ).fetchone()
+                if err_row and err_row['error_message']:
+                    return {"ok": False, "error": f"发送失败: {err_row['error_message']}"}
+        
+        return {"ok": ok, "error": "" if ok else "发送失败，请检查 Webhook URL 是否有效"}
+    
+    return {"ok": False, "error": "未知的通知通道类型"}

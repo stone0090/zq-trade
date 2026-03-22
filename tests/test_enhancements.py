@@ -1,6 +1,15 @@
 """集成测试: 验证全部8个增强功能"""
+import os
 import sys
 sys.path.insert(0, '.')
+
+from web import config
+config.DB_PATH = config.DATA_DIR / 'test_enhancements.db'
+if config.DB_PATH.exists():
+    os.remove(str(config.DB_PATH))
+
+from web.database import init_db
+init_db()
 
 from fastapi.testclient import TestClient
 from web.app import app

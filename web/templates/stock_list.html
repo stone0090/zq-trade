@@ -358,8 +358,9 @@ function updatePagination() {
   }
   pbar.classList.remove('hidden');
   document.getElementById('page-indicator').textContent = currentPage + '/' + totalPages;
-  const start = (currentPage - 1) * pageSize + 1;
-  const end = Math.min(currentPage * pageSize, totalCount);
+  const numericSize = (pageSize === 'all') ? totalCount : pageSize;
+  const start = (currentPage - 1) * numericSize + 1;
+  const end = Math.min(currentPage * numericSize, totalCount);
   document.getElementById('stock-pagination-info').textContent = '共 ' + totalCount + ' 条，当前 ' + start + '-' + end;
   document.getElementById('prev-page-btn').disabled = currentPage <= 1;
   document.getElementById('next-page-btn').disabled = currentPage >= totalPages;

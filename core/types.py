@@ -129,6 +129,7 @@ class PlatformResult:
 class ContourResult:
     """LK 轮廓质量评估结果"""
     score: GradeScore = GradeScore.C
+    pending: bool = False  # DL=C且PT阻力=C时，LK无意义，标记待定
     passed: bool = False
     quality_score: float = 0.0
     upper_smoothness: float = 0.0
@@ -184,6 +185,7 @@ class MomentumResult:
 class ReleaseResult:
     """SF 释放级别评估结果（尾部向突破方向蹭的程度）"""
     score: ReleaseLevel = ReleaseLevel.THIRD
+    pending: bool = False  # LK待定时，SF级联待定
     passed: bool = False
     tail_drift_pct: float = 0.0       # 尾部方向性偏移百分比
     tail_length: int = 0              # 检测到的尾部长度（K线数）

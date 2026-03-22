@@ -31,6 +31,9 @@ _analysis_progress = {
     'current_symbol': None,
 }
 
+# ─── 停止分析标志 ───
+_stop_analysis_flag = False
+
 
 def get_progress() -> dict:
     """获取当前分析进度"""
@@ -42,6 +45,23 @@ def is_running() -> bool:
     """是否有分析在运行"""
     with _progress_lock:
         return _analysis_progress['running']
+
+
+def stop_analysis():
+    """请求停止分析"""
+    global _stop_analysis_flag
+    _stop_analysis_flag = True
+
+
+def reset_stop_flag():
+    """重置停止标志（分析开始前调用）"""
+    global _stop_analysis_flag
+    _stop_analysis_flag = False
+
+
+def is_stop_requested() -> bool:
+    """检查是否请求停止"""
+    return _stop_analysis_flag
 
 
 def analyze_stock(symbol: str, end_date: str = None, chart_dir: str = None) -> dict:
@@ -118,6 +138,9 @@ def analyze_stocks_sync(stock_ids: list, db_path: str, chart_dir: str):
     conn.execute("PRAGMA foreign_keys=ON")
 
     try:
+        # 重置停止标志
+        reset_stop_flag()
+        
         # 获取待分析股票信息
         if not stock_ids:
             return
@@ -142,6 +165,10 @@ def analyze_stocks_sync(stock_ids: list, db_path: str, chart_dir: str):
         conn.commit()
 
         for i, row in enumerate(rows):
+            # 检查是否请求停止
+            if is_stop_requested():
+                logger.info("分析被用户停止")
+                break
             stock_id = row['id']
             symbol = row['symbol']
             end_date = row['end_date']

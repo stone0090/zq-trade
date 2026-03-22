@@ -217,7 +217,7 @@ def add_to_universe(req: AddStockReq):
 
 @router.post("/batch-action")
 def batch_action(req: BatchActionReq):
-    """批量操作：确认/移除/恢复/删除"""
+    """批量操作：确认/移除/恢复/删除/升级"""
     if req.action == "delete":
         return _batch_delete(req.stock_ids)
 
@@ -226,6 +226,7 @@ def batch_action(req: BatchActionReq):
         "remove": "removed",
         "restore": "pending",
         "upgrade_watching": "watching",
+        "upgrade_focused": "focused",
     }
     target = action_map.get(req.action)
     if not target:

@@ -286,40 +286,75 @@ def fetch_kline_smart(symbol: str,
             local_end = local_df.index[-1]
             local_start = local_df.index[0]
             logger.info(f"[{market.upper()}] {symbol} 本地缓存 {len(local_df)} 根, "
-                        f"范围 {local_start.strftime('%Y-%m-%d')} ~ {local_end.strftime('%Y-%m-%d')}")
-            # 本地数据已覆盖截止日期，直接截取
-            if local_end >= end_dt:
-                result = local_df[local_df.index <= end_dt].tail(bars)
-                logger.info(f"[{market.upper()}] {symbol} 缓存足够, 直接截取 {len(result)} 根 (渠道: 本地缓存)")
+                        f"范围 {local_start.strftime('%Y-%m-%d %H:%M')} ~ {local_end.strftime('%Y-%m-%d %H:%M')}, "
+                        f"请求截止 {end_dt.strftime('%Y-%m-%d %H:%M')}")
+            
+            # 优化：如果用户未指定截止日期(end_date为None)，且缓存数据足够，直接使用缓存
+            # 避免品种库股票每次分析都拉到最新日期，减少不必要的网络请求
+            if end_date is None and len(local_df) >= bars:
+                result = local_df.tail(bars)
+                logger.info(f"[{market.upper()}] {symbol} 未指定截止日期, 缓存数据 {len(local_df)} 根足够, 直接返回 {len(result)} 根 (渠道: 本地缓存)")
                 return result
+            
+            # 本地数据已覆盖截止日期
+            if local_end >= end_dt:
+                available = local_df[local_df.index <= end_dt]
+                if len(available) >= bars:
+                    result = available.tail(bars)
+                    logger.info(f"[{market.upper()}] {symbol} 缓存足够, 直接截取 {len(result)} 根 (渠道: 本地缓存)")
+                    return result
+                logger.info(f"[{market.upper()}] {symbol} 缓存时间足够但仅 {len(available)} 根 < {bars}, 需重新拉取")
+                # 数量不够，走下面的无缓存全量拉取路径
+                local_df = None
 
             # 有缓存但不够新 → 增量拉取
             gap_days = (end_dt - local_end).days
-            if gap_days <= 5:
-                period = '5d'
-            elif gap_days <= 30:
-                period = '1mo'
-            else:
-                period = '6mo'
 
-            yahoo_sym = _to_yahoo_symbol(symbol, market)
-            logger.info(f"[{market.upper()}] {symbol} 缓存差 {gap_days} 天, 增量拉取中...")
-            new_df = _fetch_hk_us(yahoo_sym, period=period, symbol=symbol, market=market)
-            if new_df is not None and not new_df.empty:
-                # 只保留缓存截止时间之后的新数据
-                new_df = new_df[new_df.index > local_end]
-                if not new_df.empty:
-                    merged = pd.concat([local_df, new_df])
-                    merged = merged[~merged.index.duplicated(keep='last')].sort_index()
-                    logger.info(f"[{market.upper()}] {symbol} 增量 +{len(new_df)} 根, 合并后共 {len(merged)} 根")
-                else:
-                    merged = local_df
-                    logger.info(f"[{market.upper()}] {symbol} 无新增数据, 使用本地 {len(merged)} 根")
-            else:
+            # 优化：如果缓存最新日期已覆盖请求截止日期当天，直接返回缓存
+            # 避免因为时间戳精度问题（如 15:00 vs 16:00）或跨天请求而触发不必要的网络请求
+            if local_end.date() >= end_dt.date():
                 merged = local_df
-                logger.warning(f"[{market.upper()}] {symbol} 增量获取失败, 使用本地 {len(merged)} 根")
+                logger.info(f"[{market.upper()}] {symbol} 缓存最新日期 {local_end.strftime('%Y-%m-%d')} 已覆盖请求日期 {end_dt.strftime('%Y-%m-%d')}, 跳过拉取")
+            # 优化：检查 gap 中是否存在交易日（周一~周五）
+            # 纯周末/节假日无新数据，跳过网络请求
+            else:
+                _gap_has_trading_day = False
+                for _d in range(1, gap_days + 1):
+                    if (local_end + timedelta(days=_d)).weekday() < 5:
+                        _gap_has_trading_day = True
+                        break
 
-            save_to_csv(merged, str(cache_file))
+                if not _gap_has_trading_day and gap_days > 0:
+                    # gap 全是非交易日，无需网络请求
+                    merged = local_df
+                    logger.info(f"[{market.upper()}] {symbol} 差 {gap_days} 天均为非交易日, 跳过拉取")
+                else:
+                    # 需要增量拉取
+                    if gap_days <= 5:
+                        period = '5d'
+                    elif gap_days <= 30:
+                        period = '1mo'
+                    else:
+                        period = '6mo'
+
+                    yahoo_sym = _to_yahoo_symbol(symbol, market)
+                    logger.info(f"[{market.upper()}] {symbol} 缓存差 {gap_days} 天, 增量拉取中...")
+                    new_df = _fetch_hk_us(yahoo_sym, period=period, symbol=symbol, market=market)
+                    if new_df is not None and not new_df.empty:
+                        # 只保留缓存截止时间之后的新数据
+                        new_df = new_df[new_df.index > local_end]
+                        if not new_df.empty:
+                            merged = pd.concat([local_df, new_df])
+                            merged = merged[~merged.index.duplicated(keep='last')].sort_index()
+                            logger.info(f"[{market.upper()}] {symbol} 增量 +{len(new_df)} 根, 合并后共 {len(merged)} 根")
+                        else:
+                            merged = local_df
+                            logger.info(f"[{market.upper()}] {symbol} 无新增数据, 使用本地 {len(merged)} 根")
+                    else:
+                        merged = local_df
+                        logger.warning(f"[{market.upper()}] {symbol} 增量获取失败, 使用本地 {len(merged)} 根")
+
+                    save_to_csv(merged, str(cache_file))
             result = merged[merged.index <= end_dt].tail(bars)
             logger.info(f"[{market.upper()}] {symbol} 数据就绪: {len(result)} 根K线, "
                         f"范围 {result.index[0].strftime('%Y-%m-%d')} ~ {result.index[-1].strftime('%Y-%m-%d')}")
@@ -360,31 +395,36 @@ def fetch_kline_smart(symbol: str,
         logger.info(f"[CN] {symbol} 本地缓存 {len(local_df)} 根, "
                     f"范围 {local_start.strftime('%Y-%m-%d %H:%M')} ~ {local_end.strftime('%Y-%m-%d %H:%M')}")
 
-        # 本地数据已覆盖截止日期，直接截取
+        # 本地数据已覆盖截止日期
         if local_end >= end_dt:
-            result = local_df[local_df.index <= end_dt].tail(bars)
-            logger.info(f"[CN] {symbol} 缓存足够, 直接截取 {len(result)} 根 (渠道: 本地缓存)")
-            return result
-
-        # 本地数据不够新 → 判断是否需要增量拉取
-        gap_days = (end_dt - local_end).days
-        incr_start = local_end + timedelta(hours=1)
-        incr_start_str = incr_start.strftime('%Y-%m-%d %H:%M:%S')
-        end_str = end_dt.strftime('%Y-%m-%d %H:%M:%S')
-
-        logger.info(f"[CN] {symbol} 缓存差 {gap_days} 天, 增量拉取中...")
-        try:
-            new_df = _fetch_cn(symbol, incr_start_str, end_str)
-            if new_df is not None and not new_df.empty:
-                merged = pd.concat([local_df, new_df])
-                merged = merged[~merged.index.duplicated(keep='last')].sort_index()
-                logger.info(f"[CN] {symbol} 增量 +{len(new_df)} 根, 合并后共 {len(merged)} 根")
-            else:
-                merged = local_df
-                logger.info(f"[CN] {symbol} 无新增数据, 使用本地 {len(merged)} 根")
-        except Exception as e:
-            logger.warning(f"[CN] {symbol} 增量拉取失败: {e}, 使用本地数据")
+            available = local_df[local_df.index <= end_dt]
+            if len(available) >= bars:
+                result = available.tail(bars)
+                logger.info(f"[CN] {symbol} 缓存足够, 直接截取 {len(result)} 根 (渠道: 本地缓存)")
+                return result
+            # 时间覆盖但数量不够 → 跳过增量拉取，直接向前补数据
+            logger.info(f"[CN] {symbol} 缓存时间足够但仅 {len(available)} 根 < {bars}, 需向前补充")
             merged = local_df
+        else:
+            # 本地数据不够新 → 增量拉取
+            gap_days = (end_dt - local_end).days
+            incr_start = local_end + timedelta(hours=1)
+            incr_start_str = incr_start.strftime('%Y-%m-%d %H:%M:%S')
+            end_str = end_dt.strftime('%Y-%m-%d %H:%M:%S')
+
+            logger.info(f"[CN] {symbol} 缓存差 {gap_days} 天, 增量拉取中...")
+            try:
+                new_df = _fetch_cn(symbol, incr_start_str, end_str)
+                if new_df is not None and not new_df.empty:
+                    merged = pd.concat([local_df, new_df])
+                    merged = merged[~merged.index.duplicated(keep='last')].sort_index()
+                    logger.info(f"[CN] {symbol} 增量 +{len(new_df)} 根, 合并后共 {len(merged)} 根")
+                else:
+                    merged = local_df
+                    logger.info(f"[CN] {symbol} 无新增数据, 使用本地 {len(merged)} 根")
+            except Exception as e:
+                logger.warning(f"[CN] {symbol} 增量拉取失败: {e}, 使用本地数据")
+                merged = local_df
 
         # 同时检查是否需要往前补数据
         if local_start > start_dt:

@@ -29,20 +29,26 @@ if ! $PYTHON -c "import uvicorn" 2>/dev/null; then
     echo ""
 fi
 
-# 检查端口 8000 是否被占用
+# 检查端口 8000 是否被占用，杀掉所有占用进程（含 uvicorn 子进程）
 if command -v lsof &>/dev/null; then
-    PID=$(lsof -ti:8000 2>/dev/null)
-    if [ -n "$PID" ]; then
-        echo "[提示] 端口 8000 被进程 $PID 占用，正在释放..."
-        kill -9 $PID 2>/dev/null
-        sleep 1
+    PIDS=$(lsof -ti:8000 2>/dev/null)
+    if [ -n "$PIDS" ]; then
+        echo "[提示] 端口 8000 被占用，正在释放..."
+        for p in $PIDS; do
+            kill -9 "$p" 2>/dev/null
+        done
+        sleep 2
     fi
 elif command -v netstat &>/dev/null; then
-    PID=$(netstat -ano 2>/dev/null | grep ":8000.*LISTENING" | awk '{print $5}' | head -1)
-    if [ -n "$PID" ] && [ "$PID" != "0" ]; then
-        echo "[提示] 端口 8000 被进程 $PID 占用，正在释放..."
-        taskkill //PID $PID //F 2>/dev/null || kill -9 $PID 2>/dev/null
-        sleep 1
+    PIDS=$(netstat -ano 2>/dev/null | grep ":8000.*LISTENING" | awk '{print $5}' | sort -u)
+    if [ -n "$PIDS" ]; then
+        echo "[提示] 端口 8000 被占用，正在释放..."
+        for p in $PIDS; do
+            [ "$p" = "0" ] && continue
+            # Windows: 用 taskkill /T 杀掉进程树（含子进程）
+            taskkill //PID "$p" //F //T 2>/dev/null || kill -9 "$p" 2>/dev/null
+        done
+        sleep 2
     fi
 fi
 

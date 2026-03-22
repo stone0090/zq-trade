@@ -9,7 +9,8 @@ import pandas as pd
 from datetime import datetime
 
 from core.types import (
-    AnalyzerConfig, ScoreCard, GradeScore, ReleaseLevel
+    AnalyzerConfig, ScoreCard, GradeScore, ReleaseLevel,
+    ContourResult, ReleaseResult, SqueezeResult, MomentumResult
 )
 from core.analyzer.structure import analyze_structure
 from core.analyzer.platform import analyze_platform, activate_platform
@@ -68,30 +69,48 @@ def run_full_analysis(df: pd.DataFrame,
     # 如果PT的第一个触碰点远在DL起点之后，收紧DL边界
     _refine_dl_from_pt(dl, pt)
 
-    # ─── 3. LK 轮廓 ───
-    lk = analyze_contour(df, dl, config)
-    card.lk_result = lk
+    # ─── 级联待定判定 ───
+    # 纯做多模式: PT阻力位=C → 无有效平台位，LK/SF/TY/DN 无意义
+    _pt_insufficient = (pt.resistance_score == GradeScore.C)
 
-    # ─── 4. SF 释放级别（在TY/DN之前，评估尾部是否向突破方向蹭） ───
-    # A股方向固定为bullish，美股从PT推断
-    if market == 'cn':
-        sf_direction = 'bullish'
+    if _pt_insufficient:
+        lk = ContourResult(pending=True,
+                           reasoning=["PT阻力=C，无有效平台位，LK待定"])
+        sf = ReleaseResult(pending=True,
+                           reasoning=["LK待定，SF级联待定"])
     else:
-        sf_direction = _determine_direction_from_pt(pt)
-    sf = analyze_release(df, dl, config, direction=sf_direction, platform=pt)
+        # ─── 3. LK 轮廓 ───
+        lk = analyze_contour(df, dl, config)
+        if lk.pending:
+            # LK 待定 → SF 级联待定
+            sf = ReleaseResult(pending=True,
+                               reasoning=["LK待定，SF级联待定"])
+        else:
+            # ─── 4. SF 释放级别 ───
+            sf = analyze_release(df, dl, config,
+                                 direction='bullish', platform=pt)
+    card.lk_result = lk
     card.sf_result = sf
 
-    # ─── 5. TY 统一区间 ───
-    ty = analyze_squeeze(df, dl, config, platform=pt)
+    # ─── 级联待定: LK/SF待定 → TY/DN也待定 ───
+    if lk.pending:
+        ty = SqueezeResult(pending=True,
+                           reasoning=["LK/SF待定，TY级联待定"])
+        dn = MomentumResult(pending=True,
+                            reasoning=["LK/SF待定，DN级联待定"])
+    else:
+        # ─── 5. TY 统一区间 ───
+        ty = analyze_squeeze(df, dl, config, platform=pt)
+
+        # ─── 6. DN 动能 ───
+        dn = analyze_momentum(df, dl, pt, ty, config)
+
+        # DN方向确定后，激活对应平台位
+        if not dn.pending and dn.direction:
+            activate_platform(pt, dn.direction)
+
     card.ty_result = ty
-
-    # ─── 6. DN 动能 ───
-    dn = analyze_momentum(df, dl, pt, ty, config)
     card.dn_result = dn
-
-    # DN方向确定后，激活对应平台位
-    if not dn.pending and dn.direction:
-        activate_platform(pt, dn.direction)
 
     # ─── 7. DL参考信息：记录急跌/急涨和倾斜（不影响DL评分） ───
     _note_dl_context(card, config)
@@ -110,18 +129,7 @@ def run_full_analysis(df: pd.DataFrame,
 
 
 def _determine_direction_from_pt(pt) -> str:
-    """
-    从PT结果推断方向。
-    优先看多：仅当只有支撑位达标（无有效阻力位）时才看空，其余情况一律看多。
-    """
-    if not pt:
-        return 'bullish'
-    has_resistance = (pt.resistance_price > 0
-                      and pt.resistance_score.value >= GradeScore.B.value)
-    has_support = (pt.support_price > 0
-                   and pt.support_score.value >= GradeScore.B.value)
-    if has_support and not has_resistance:
-        return 'bearish'
+    """纯做多模式，始终返回 bullish"""
     return 'bullish'
 
 
@@ -292,8 +300,14 @@ def _determine_position(card: ScoreCard):
     if card.dn_result and card.dn_result.pending:
         return "等待", "DN尚未触发，等待突破K线出现"
 
+    # LK/SF pending → 等待
+    if card.lk_result and card.lk_result.pending:
+        return "等待", "LK待定（结构/平台条件不足）"
+    if card.sf_result and card.sf_result.pending:
+        return "等待", "SF待定（等待LK确定后评估）"
+
     # SF=3rd → 不做
-    if card.sf_result and card.sf_result.score == ReleaseLevel.THIRD:
+    if card.sf_result and not card.sf_result.pending and card.sf_result.score == ReleaseLevel.THIRD:
         return "不做", f"SF=3rd，动能已消耗完，需等待全新独立结构"
 
     # DL未通过 → 等待观察
@@ -316,13 +330,19 @@ def _determine_position(card: ScoreCard):
         shortfalls.append("PT=?")
 
     lk = card.lk_result
-    if not lk or lk.score.value < GradeScore.A.value:
-        shortfalls.append(f"LK={lk.score}" if lk else "LK=?")
+    if not lk or lk.pending or lk.score.value < GradeScore.A.value:
+        if lk and lk.pending:
+            shortfalls.append("LK=待定")
+        else:
+            shortfalls.append(f"LK={lk.score}" if lk else "LK=?")
 
     sf = card.sf_result
-    sf_is_1st = sf and sf.score == ReleaseLevel.FIRST
-    if not sf_is_1st:
-        shortfalls.append(f"SF={sf.score}" if sf else "SF=?")
+    if sf and sf.pending:
+        shortfalls.append("SF=待定")
+    else:
+        sf_is_1st = sf and sf.score == ReleaseLevel.FIRST
+        if not sf_is_1st:
+            shortfalls.append(f"SF={sf.score}" if sf else "SF=?")
 
     ty = card.ty_result
     if not ty or ty.pending or ty.score.value < GradeScore.A.value:
@@ -343,7 +363,7 @@ def _determine_position(card: ScoreCard):
         return "0.5R", f"TY≥A+DN=S，可半仓做（{', '.join(shortfalls)}）"
 
     # SF=2nd + 其他维度一般 → 等待
-    if sf and sf.score == ReleaseLevel.SECOND:
+    if sf and not sf.pending and sf.score == ReleaseLevel.SECOND:
         return "等待", f"SF=2nd，需再等一段调整（{', '.join(shortfalls)}）"
 
     # 其余情况 → 不做
@@ -377,10 +397,20 @@ def _build_conclusions(card: ScoreCard):
         dl_tag = "F"
 
     lk = card.lk_result
-    lk_tag = _tag_with_reason(lk.score, _get_lk_reason(lk)) if lk else "?"
+    if lk and lk.pending:
+        lk_tag = "待定"
+    elif lk:
+        lk_tag = _tag_with_reason(lk.score, _get_lk_reason(lk))
+    else:
+        lk_tag = "?"
 
     sf = card.sf_result
-    sf_tag = _tag_sf_with_reason(sf) if sf else "--"
+    if sf and sf.pending:
+        sf_tag = "待定"
+    elif sf:
+        sf_tag = _tag_sf_with_reason(sf)
+    else:
+        sf_tag = "--"
 
     ty = card.ty_result
     if ty and ty.pending:
@@ -402,74 +432,29 @@ def _build_conclusions(card: ScoreCard):
     pt = card.pt_result
     has_resistance = (pt and pt.resistance_price > 0
                       and pt.resistance_score.value >= GradeScore.B.value)
-    has_support = (pt and pt.support_price > 0
-                   and pt.support_score.value >= GradeScore.B.value)
 
-    # ─── 确定要输出的方向 ───
-    long_only = (card.market == 'cn')
-
+    # ─── 确定要输出的方向（纯做多） ───
     directions = []
 
-    if dn and not dn.pending and dn.direction:
-        if dn.direction == 'bullish':
-            directions.append(('bullish', True))
-            if has_support and not long_only:
-                directions.append(('bearish', False))
-        else:
-            if long_only:
-                directions.append(('bearish_reject', True))
-            else:
-                directions.append(('bearish', True))
-                if has_resistance:
-                    directions.append(('bullish', False))
-    else:
-        if has_resistance:
-            directions.append(('bullish', True))
-        if has_support and not long_only:
-            directions.append(('bearish', True))
+    if dn and not dn.pending and dn.direction == 'bullish':
+        directions.append(('bullish', True))
+    elif has_resistance:
+        directions.append(('bullish', True))
 
     if not directions:
         pt_tag = _tag_with_reason(pt.score, _get_pt_reason(pt, pt.score)) if pt else "?"
-        score_str = f"DL{dl_tag} / PT{pt_tag} / LK{lk_tag} / {sf_tag} / TY{ty_tag} / DN{dn_tag}"
         simple_str = f"DL{_strip_reason(dl_tag)} / PT{_strip_reason(pt_tag)} / LK{_strip_reason(lk_tag)} / {_strip_reason(sf_tag)} / TY{_strip_reason(ty_tag)} / DN{_strip_reason(dn_tag)}"
         dir_label = "待定"
         card.conclusion_lines.append(f"{dir_label}：{simple_str}")
         return
 
-    # ─── 为每个方向生成结论行 ───
+    # ─── 生成结论行（纯做多） ───
     for dir_type, is_main in directions:
-        if dir_type == 'bearish_reject':
-            pt_s = pt.support_score if pt and pt.support_price > 0 else GradeScore.C
-            pt_tag = _tag_with_reason(pt_s, _get_pt_reason(pt, pt_s, 'support'))
-            score_str = f"DL{dl_tag} / PT{pt_tag} / LK{lk_tag} / {sf_tag} / TY{ty_tag} / DN{dn_tag}"
-            simple_str = f"DL{_strip_reason(dl_tag)} / PT{_strip_reason(pt_tag)} / LK{_strip_reason(lk_tag)} / {_strip_reason(sf_tag)} / TY{_strip_reason(ty_tag)} / DN{_strip_reason(dn_tag)}"
-            card.conclusion_lines.append(f"看空：{simple_str}  (A股不做空)")
-            continue
-
-        if dir_type == 'bullish':
-            dir_label = "待定(多)" if dn_pending else "看多"
-            pt_score = pt.resistance_score if pt and pt.resistance_price > 0 else GradeScore.C
-            pt_tag = _tag_with_reason(pt_score, _get_pt_reason(pt, pt_score, 'resistance'))
-        else:
-            dir_label = "待定(空)" if dn_pending else "看空"
-            pt_score = pt.support_score if pt and pt.support_price > 0 else GradeScore.C
-            pt_tag = _tag_with_reason(pt_score, _get_pt_reason(pt, pt_score, 'support'))
-
-        score_str = f"DL{dl_tag} / PT{pt_tag} / LK{lk_tag} / {sf_tag} / TY{ty_tag} / DN{dn_tag}"
+        dir_label = "待定(多)" if dn_pending else "看多"
+        pt_score = pt.resistance_score if pt and pt.resistance_price > 0 else GradeScore.C
+        pt_tag = _tag_with_reason(pt_score, _get_pt_reason(pt, pt_score, 'resistance'))
         simple_str = f"DL{_strip_reason(dl_tag)} / PT{_strip_reason(pt_tag)} / LK{_strip_reason(lk_tag)} / {_strip_reason(sf_tag)} / TY{_strip_reason(ty_tag)} / DN{_strip_reason(dn_tag)}"
-
-        if is_main:
-            card.conclusion_lines.append(f"{dir_label}：{simple_str}")
-        else:
-            if dir_type == 'bullish' and pt:
-                zone_info = (f"阻力 {pt.resistance_zone_low:.2f}"
-                             f"~{pt.resistance_zone_high:.2f}")
-            elif pt:
-                zone_info = (f"支撑 {pt.support_zone_low:.2f}"
-                             f"~{pt.support_zone_high:.2f}")
-            else:
-                zone_info = ""
-            card.conclusion_lines.append(f"备注：{simple_str}  {zone_info}")
+        card.conclusion_lines.append(f"{dir_label}：{simple_str}")
 
 
 # ─── 各维度简短原因提取 ───
