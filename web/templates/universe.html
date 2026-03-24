@@ -281,7 +281,7 @@ function changePageSize(val) {
 async function loadStats() {
   try {
     const stats = await api('/api/universe/stats');
-    var tabs = ['pending', 'idle', 'watching', 'focused', 'holding', 'removed'];
+    var tabs = ['all', 'pending', 'idle', 'watching', 'focused', 'holding', 'removed'];
     tabs.forEach(function(t) {
       var el = document.getElementById('tab-count-' + t);
       if (el) el.textContent = stats[t] || 0;
