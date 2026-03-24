@@ -111,12 +111,12 @@ def list_universe_stocks(
         conditions = []
         params = []
 
-        if watch_status:
+        if watch_status and watch_status != 'all':
             statuses = watch_status.split(",")
             placeholders = ",".join("?" * len(statuses))
             conditions.append(f"s.watch_status IN ({placeholders})")
             params.extend(statuses)
-        else:
+        elif not watch_status:
             conditions.append("s.watch_status IN ('pending','idle','removed')")
 
         if search:
@@ -329,7 +329,12 @@ def universe_stats():
             WHERE watch_status != 'none'
             GROUP BY watch_status
         """).fetchall()
+        # 计算总数
+        total_row = conn.execute("""
+            SELECT COUNT(*) as cnt FROM stocks WHERE watch_status != 'none'
+        """).fetchone()
     stats = {r['watch_status']: r['cnt'] for r in rows}
+    stats['all'] = total_row['cnt'] if total_row else 0
     return stats
 
 

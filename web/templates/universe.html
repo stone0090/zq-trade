@@ -13,10 +13,11 @@
 
 <!-- Tabs（带常驻数量） -->
 <div class="flex gap-1 mb-4 border-b">
+  <button class="tab-btn active" data-tab="all" onclick="switchTab('all')">全部 <span id="tab-count-all" class="tab-badge">0</span></button>
   <button class="tab-btn" data-tab="pending" onclick="switchTab('pending')">待入库 <span id="tab-count-pending" class="tab-badge">0</span></button>
   <button class="tab-btn" data-tab="idle" onclick="switchTab('idle')">在库中 <span id="tab-count-idle" class="tab-badge">0</span></button>
   <button class="tab-btn" data-tab="watching" onclick="switchTab('watching')">关注中 <span id="tab-count-watching" class="tab-badge">0</span></button>
-  <button class="tab-btn active" data-tab="focused" onclick="switchTab('focused')">重点关注 <span id="tab-count-focused" class="tab-badge">0</span></button>
+  <button class="tab-btn" data-tab="focused" onclick="switchTab('focused')">重点关注 <span id="tab-count-focused" class="tab-badge">0</span></button>
   <button class="tab-btn" data-tab="holding" onclick="switchTab('holding')">持仓中 <span id="tab-count-holding" class="tab-badge">0</span></button>
   <button class="tab-btn" data-tab="removed" onclick="switchTab('removed')">已移除 <span id="tab-count-removed" class="tab-badge">0</span></button>
 </div>
@@ -167,7 +168,7 @@
 
 {% block scripts %}
 <script>
-let currentTab = 'focused';
+let currentTab = 'all';
 let allStocks = [];
 let selectedIds = new Set();
 let debounceTimer = null;
@@ -326,7 +327,12 @@ function switchTab(tab, resetPage) {
   removeBtn.style.display = 'none';
   deleteBtn.style.display = 'none';
   
-  if (tab === 'removed') {
+  if (tab === 'all') {
+    // 全部：重新分析 + 移除
+    removeBtn.textContent = '批量移除';
+    removeBtn.onclick = function() { batchAction('remove'); };
+    removeBtn.style.display = '';
+  } else if (tab === 'removed') {
     mainBtn.textContent = '批量恢复';
     mainBtn.onclick = function() { batchAction('restore'); };
     mainBtn.style.display = '';
@@ -436,6 +442,12 @@ function renderAnalysisStatus(s) {
 function renderActions(s) {
   var ws = s.watch_status;
   var btns = [];
+  // 全部 tab 显示简化操作
+  if (currentTab === 'all') {
+    btns.push('<button class="btn btn-ghost btn-sm" onclick="batchReanalyzeSingle(\'' + s.id + '\')">重新分析</button>');
+    btns.push('<button class="btn btn-ghost btn-sm text-gray-500" onclick="removeStock(\'' + s.id + '\')">移除</button>');
+    return btns.join(' ');
+  }
   if (ws === 'pending') {
     btns.push('<button class="btn btn-success btn-sm" onclick="confirmStock(\'' + s.id + '\')">确认</button>');
     btns.push('<button class="btn btn-danger btn-sm" onclick="removeStock(\'' + s.id + '\')">拒绝</button>');
@@ -575,6 +587,17 @@ async function batchReanalyze() {
     showToast('批量重新分析已启动 (' + selectedIds.size + '项)');
     selectedIds.clear();
     updateBatchBar();
+    refreshAll();
+  } catch(e) { showToast(e.message, 'error'); }
+}
+
+async function batchReanalyzeSingle(stockId) {
+  try {
+    await api('/api/stocks/analyze', {
+      method: 'POST',
+      body: JSON.stringify({stock_ids: [stockId]})
+    });
+    showToast('重新分析已启动');
     refreshAll();
   } catch(e) { showToast(e.message, 'error'); }
 }
