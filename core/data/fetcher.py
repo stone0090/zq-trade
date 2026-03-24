@@ -1103,6 +1103,13 @@ def _fetch_via_em_us_hourly(symbol: str) -> pd.DataFrame:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors='coerce')
 
+    # 过滤掉非交易时段数据（美股美东时间 9:30-16:00）
+    # 东财返回的时间已经是美东时间
+    df = df.between_time('09:30', '16:00')
+
+    if df.empty:
+        raise ValueError(f"东财美股 {symbol} 过滤非交易时段后无数据")
+
     # 1分钟 → 60分钟重采样
     hourly = df.resample('1h').agg({
         'Open': 'first', 'High': 'max', 'Low': 'min',
