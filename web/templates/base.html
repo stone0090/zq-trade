@@ -69,7 +69,11 @@
       setTimeout(() => { t.style.opacity = '0'; setTimeout(() => t.remove(), 300); }, 2000);
     }
     async function api(url, opts={}) {
-      const resp = await fetch(url, { headers: {'Content-Type': 'application/json'}, ...opts });
+      const resp = await fetch(url, { 
+        headers: {'Content-Type': 'application/json'}, 
+        cache: 'no-cache',
+        ...opts 
+      });
       if (!resp.ok) {
         const err = await resp.json().catch(() => ({detail: resp.statusText}));
         throw new Error(err.detail || '请求失败');
