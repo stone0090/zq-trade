@@ -145,7 +145,7 @@ function renderTable() {
       <td class="px-4 py-3 text-center">${gradeTag(s.sf_grade)}</td>
       <td class="px-4 py-3 text-center">${gradeTag(s.ty_grade)}</td>
       <td class="px-4 py-3 text-center">${gradeTag(s.dn_grade)}</td>
-      <td class="px-4 py-3 text-center text-xs text-gray-400">${formatTime(s.kline_end_time || s.updated_at)}</td>
+      <td class="px-4 py-3 text-center text-xs text-gray-400">${formatTime(s.kline_end_time)}</td>
       <td class="px-4 py-3 text-center">${s.news_alert ? '<span class="text-yellow-500 text-lg" title="有新闻异动">⚡</span>' : ''}</td>
       <td class="px-4 py-3 text-center">${renderActions(s)}</td>
     </tr>

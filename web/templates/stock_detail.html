@@ -290,7 +290,7 @@ async function loadDetail() {
     currentStockTags = stockData.tags || [];
     renderTagSelect();
     document.getElementById('stock-end-date').textContent = stockData.end_date || '-';
-    document.getElementById('stock-kline-time').textContent = formatTime(stockData.kline_end_time || stockData.updated_at);
+    document.getElementById('stock-kline-time').textContent = formatTime(stockData.kline_end_time);
 
     // 品种库模式 UI 适配
     if (detailFrom === 'universe') {
