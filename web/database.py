@@ -336,7 +336,8 @@ def _migrate_from_batches(conn):
         conclusion TEXT,
         position_size TEXT,
         created_at TEXT NOT NULL,
-        analyzed_at TEXT
+        analyzed_at TEXT,
+        kline_end_time TEXT
     );
 
     CREATE UNIQUE INDEX IF NOT EXISTS idx_stocks_symbol_enddate
@@ -548,6 +549,7 @@ def _ensure_watch_status_columns(conn):
         'last_price_time': "ALTER TABLE stocks ADD COLUMN last_price_time TEXT",
         'fundamental_json': "ALTER TABLE stocks ADD COLUMN fundamental_json TEXT",
         'news_alert': "ALTER TABLE stocks ADD COLUMN news_alert INTEGER DEFAULT 0",
+        'kline_end_time': "ALTER TABLE stocks ADD COLUMN kline_end_time TEXT",
     }
     for col_name, alter_sql in new_cols.items():
         if col_name not in cols:

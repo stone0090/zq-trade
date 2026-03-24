@@ -80,8 +80,8 @@
       <button class="text-blue-500 hover:text-blue-700 text-xs" onclick="editEndDate()">修改</button>
     </div>
     <div class="flex items-center gap-2">
-      <span class="text-gray-500">最后更新:</span>
-      <span id="stock-updated-at" class="font-mono text-gray-400">-</span>
+      <span class="text-gray-500">数据时间:</span>
+      <span id="stock-kline-time" class="font-mono text-gray-400">-</span>
     </div>
   </div>
   <!-- 基本面摘要（行业/市值） -->
@@ -290,7 +290,7 @@ async function loadDetail() {
     currentStockTags = stockData.tags || [];
     renderTagSelect();
     document.getElementById('stock-end-date').textContent = stockData.end_date || '-';
-    document.getElementById('stock-updated-at').textContent = formatTime(stockData.updated_at);
+    document.getElementById('stock-kline-time').textContent = formatTime(stockData.kline_end_time || stockData.updated_at);
 
     // 品种库模式 UI 适配
     if (detailFrom === 'universe') {

@@ -205,7 +205,7 @@ def analyze_stocks_sync(stock_ids: list, db_path: str, chart_dir: str):
                         dl_grade=?, pt_grade=?, lk_grade=?,
                         sf_grade=?, ty_grade=?, dn_grade=?,
                         conclusion=?, position_size=?,
-                        analyzed_at=?, updated_at=?
+                        analyzed_at=?, updated_at=?, kline_end_time=?
                     WHERE id=?
                 """, (
                     new_name, result['market'],
@@ -220,7 +220,8 @@ def analyze_stocks_sync(stock_ids: list, db_path: str, chart_dir: str):
                     result['conclusion'],
                     result['position_size'],
                     datetime.now().isoformat(),
-                    result.get('last_data_time', datetime.now().isoformat()),
+                    datetime.now().isoformat(),
+                    result.get('last_data_time'),
                     stock_id,
                 ))
                 conn.commit()

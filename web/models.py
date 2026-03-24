@@ -71,6 +71,7 @@ class StockListItem(BaseModel):
     label_status: str  # "labeled" | "unlabeled"
     analyzed_at: Optional[str]
     updated_at: Optional[str]
+    kline_end_time: Optional[str]
     tags: List[str] = []
 
 class StockDetail(BaseModel):
@@ -93,6 +94,7 @@ class StockDetail(BaseModel):
     label: Optional[dict]
     analyzed_at: Optional[str]
     updated_at: Optional[str]
+    kline_end_time: Optional[str]
     tags: List[str] = []
     fundamentals: Optional[dict] = None
 

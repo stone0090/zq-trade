@@ -52,7 +52,7 @@
         <th class="px-4 py-3 text-center">SF</th>
         <th class="px-4 py-3 text-center">TY</th>
         <th class="px-4 py-3 text-center">DN</th>
-        <th class="px-4 py-3 text-center">更新时间</th>
+        <th class="px-4 py-3 text-center">数据时间</th>
         <th class="px-4 py-3 text-center">异动</th>
         <th class="px-4 py-3 text-center">操作</th>
       </tr>
@@ -145,7 +145,7 @@ function renderTable() {
       <td class="px-4 py-3 text-center">${gradeTag(s.sf_grade)}</td>
       <td class="px-4 py-3 text-center">${gradeTag(s.ty_grade)}</td>
       <td class="px-4 py-3 text-center">${gradeTag(s.dn_grade)}</td>
-      <td class="px-4 py-3 text-center text-xs text-gray-400">${formatTime(s.updated_at)}</td>
+      <td class="px-4 py-3 text-center text-xs text-gray-400">${formatTime(s.kline_end_time || s.updated_at)}</td>
       <td class="px-4 py-3 text-center">${s.news_alert ? '<span class="text-yellow-500 text-lg" title="有新闻异动">⚡</span>' : ''}</td>
       <td class="px-4 py-3 text-center">${renderActions(s)}</td>
     </tr>

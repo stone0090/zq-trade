@@ -93,6 +93,7 @@ def list_stocks(
                    COALESCE(NULLIF(l.verdict, ''), s.position_size) as position_size,
                    s.analyzed_at,
                    s.updated_at,
+                   s.kline_end_time,
                    CASE WHEN l.id IS NOT NULL THEN 'labeled' ELSE 'unlabeled' END as label_status
             FROM stocks s
             LEFT JOIN labels l ON l.stock_id = s.id
@@ -432,6 +433,7 @@ def get_stock(stock_id: str):
         label=label,
         analyzed_at=row['analyzed_at'],
         updated_at=row['updated_at'] if 'updated_at' in row.keys() else None,
+        kline_end_time=row['kline_end_time'] if 'kline_end_time' in row.keys() else None,
         tags=tags,
         fundamentals=fundamentals,
     )

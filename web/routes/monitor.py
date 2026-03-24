@@ -68,7 +68,7 @@ def list_monitor_stocks(
                    s.last_price, s.last_price_time, s.news_alert,
                    s.dl_grade, s.pt_grade, s.lk_grade,
                    s.sf_grade, s.ty_grade, s.dn_grade,
-                   s.analyzed_at, s.updated_at
+                   s.analyzed_at, s.updated_at, s.kline_end_time
             FROM stocks s
             {where}
             ORDER BY
