@@ -111,6 +111,9 @@ def list_universe_stocks(
         conditions = []
         params = []
 
+        # 品种库只显示没有 end_date 的股票（排除标注数据）
+        conditions.append("s.end_date IS NULL")
+        
         if watch_status and watch_status != 'all':
             statuses = watch_status.split(",")
             placeholders = ",".join("?" * len(statuses))
@@ -321,17 +324,17 @@ def upgrade_stock(stock_id: str, target: str = Query("watching")):
 
 @router.get("/stats")
 def universe_stats():
-    """获取品种库统计（包含所有状态）"""
+    """获取品种库统计（包含所有状态，排除标注数据）"""
     with get_db() as conn:
         rows = conn.execute("""
             SELECT watch_status, COUNT(*) as cnt
             FROM stocks
-            WHERE watch_status != 'none'
+            WHERE watch_status != 'none' AND end_date IS NULL
             GROUP BY watch_status
         """).fetchall()
-        # 计算总数
+        # 计算总数（排除标注数据）
         total_row = conn.execute("""
-            SELECT COUNT(*) as cnt FROM stocks WHERE watch_status != 'none'
+            SELECT COUNT(*) as cnt FROM stocks WHERE watch_status != 'none' AND end_date IS NULL
         """).fetchone()
     stats = {r['watch_status']: r['cnt'] for r in rows}
     stats['all'] = total_row['cnt'] if total_row else 0
