@@ -288,14 +288,7 @@ def fetch_kline_smart(symbol: str,
             logger.info(f"[{market.upper()}] {symbol} 本地缓存 {len(local_df)} 根, "
                         f"范围 {local_start.strftime('%Y-%m-%d %H:%M')} ~ {local_end.strftime('%Y-%m-%d %H:%M')}, "
                         f"请求截止 {end_dt.strftime('%Y-%m-%d %H:%M')}")
-            
-            # 优化：如果用户未指定截止日期(end_date为None)，且缓存数据足够，直接使用缓存
-            # 避免品种库股票每次分析都拉到最新日期，减少不必要的网络请求
-            if end_date is None and len(local_df) >= bars:
-                result = local_df.tail(bars)
-                logger.info(f"[{market.upper()}] {symbol} 未指定截止日期, 缓存数据 {len(local_df)} 根足够, 直接返回 {len(result)} 根 (渠道: 本地缓存)")
-                return result
-            
+
             # 本地数据已覆盖截止日期
             if local_end >= end_dt:
                 available = local_df[local_df.index <= end_dt]
