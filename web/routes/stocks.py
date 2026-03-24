@@ -544,5 +544,6 @@ def _row_to_list_item(row, tags: list) -> StockListItem:
         label_status=row['label_status'],
         analyzed_at=row['analyzed_at'],
         updated_at=row['updated_at'] if 'updated_at' in row.keys() else None,
+        kline_end_time=row['kline_end_time'] if 'kline_end_time' in row.keys() else None,
         tags=tags,
     )
