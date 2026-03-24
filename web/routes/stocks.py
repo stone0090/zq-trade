@@ -407,6 +407,11 @@ def get_stock(stock_id: str):
         eff_ty = (label_row['ty_grade'] if label_row and label_row['ty_grade'] else None) or row['ty_grade']
         eff_dn = (label_row['dn_grade'] if label_row and label_row['dn_grade'] else None) or row['dn_grade']
 
+    # 仓位建议优先级：人工标注的verdict > 算法的position_size
+    eff_position_size = (label_row['verdict'] if label_row and label_row['verdict'] else None) or row['position_size']
+    # 结论优先级：人工标注的reason > 算法的conclusion
+    eff_conclusion = (label_row['reason'] if label_row and label_row['reason'] else None) or row['conclusion']
+
     return StockDetail(
         id=row['id'],
         symbol=row['symbol'],
@@ -422,8 +427,8 @@ def get_stock(stock_id: str):
         sf_grade=eff_sf,
         ty_grade=eff_ty,
         dn_grade=eff_dn,
-        conclusion=row['conclusion'],
-        position_size=row['position_size'],
+        conclusion=eff_conclusion,
+        position_size=eff_position_size,
         label=label,
         analyzed_at=row['analyzed_at'],
         updated_at=row['updated_at'] if 'updated_at' in row.keys() else None,
