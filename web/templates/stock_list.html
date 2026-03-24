@@ -318,6 +318,8 @@ async function loadStocks() {
       if (v) params.push(dim + '=' + encodeURIComponent(v));
     });
     url += '?' + params.join('&');
+    // 添加时间戳防止缓存
+    url += '&_t=' + Date.now();
 
     const data = await api(url);
     allStocks = data.items;
