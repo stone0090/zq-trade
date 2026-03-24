@@ -622,6 +622,8 @@ async function saveLabel(e) {
     } else {
       showToast('标注已保存');
     }
+    // 刷新列表数据，确保返回后列表显示最新状态
+    await loadStockList();
   } catch(e) { showToast(e.message, 'error'); }
   finally {
     btn.disabled = false;
